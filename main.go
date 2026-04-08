@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"bytes"
 
 	"github.com/gorilla/websocket"
 )
@@ -35,12 +36,14 @@ type KeyringUpdate struct {
 var (
 	serverAddr string
 	token      string
+	handler    string
 	trustedKeys = make(map[string]ed25519.PublicKey)
 )
 
 func main() {
 	flag.StringVar(&serverAddr, "server", "localhost:8080", "Server address (host:port)")
 	flag.StringVar(&token, "token", "", "Agent Token (AGENT_...")
+	flag.StringVar(&handler, "handler", "", "Path to custom script/executable. If set, agent pipes all incoming JSON to stdin of this script.")
 	flag.Parse()
 
 	if token == "" {
@@ -109,12 +112,7 @@ func updateKeyring(keys []string) {
 }
 
 func handleMessage(conn *websocket.Conn, env Envelope) {
-	// Only process commands
-	if !strings.HasPrefix(env.Text, "CMD: ") {
-		return
-	}
-
-	log.Printf("📩 Received Command from %s", env.Sender)
+	log.Printf("📩 Received Command/Message from %s", env.Sender)
 
 	// Verify Signature
 	if env.Pubkey == "" || env.Signature == "" {
@@ -132,6 +130,37 @@ func handleMessage(conn *websocket.Conn, env Envelope) {
 	sigBytes, _ := base64.StdEncoding.DecodeString(env.Signature)
 	if !ed25519.Verify(pubKey, []byte(env.Payload), sigBytes) {
 		sendReply(conn, env.ChannelID, "Error: Invalid Signature", "error")
+		return
+	}
+
+	// Dispatch to handler if set
+	if handler != "" {
+		log.Printf("🚀 Dispatching to handler: %s", handler)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, handler)
+		envJSON, _ := json.Marshal(env)
+		cmd.Stdin = bytes.NewReader(envJSON)
+
+		out, err := cmd.CombinedOutput()
+		output := string(out)
+
+		if ctx.Err() == context.DeadlineExceeded {
+			output += "\n[Error] Handler timed out (30s limit)."
+		} else if err != nil {
+			output += fmt.Sprintf("\nError: %v", err)
+		}
+
+		if strings.TrimSpace(output) != "" {
+			sendReply(conn, env.ChannelID, output, "info")
+		}
+		return
+	}
+
+	// Legacy behavior (sh -c)
+	if !strings.HasPrefix(env.Text, "CMD: ") {
 		return
 	}
 

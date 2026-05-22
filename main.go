@@ -23,7 +23,7 @@ type Envelope struct {
 	Text      string `json:"text"`
 	Sender    string `json:"sender"`
 	Severity  string `json:"severity"`
-	Payload   string `json:"payload"`
+	Payload   string `json:"payload_raw"` // raw string preserved for Ed25519 verification
 	Signature string `json:"signature"`
 	Pubkey    string `json:"pubkey"`
 }

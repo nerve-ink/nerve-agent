@@ -77,7 +77,11 @@ func main() {
 		log.Fatalf("ECDH key error: %v", err)
 	}
 
-	u := url.URL{Scheme: "ws", Host: serverAddr, Path: "/api/v1/stream", RawQuery: "token=" + token}
+	scheme := "ws"
+	if !strings.HasPrefix(serverAddr, "localhost") && !strings.HasPrefix(serverAddr, "127.") {
+		scheme = "wss"
+	}
+	u := url.URL{Scheme: scheme, Host: serverAddr, Path: "/api/v1/stream", RawQuery: "token=" + token}
 	log.Printf("Connecting to %s", u.String())
 
 	for {

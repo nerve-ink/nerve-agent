@@ -15,11 +15,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	mathrand "math/rand"
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -49,15 +52,37 @@ var (
 	token       string
 	handler     string
 	keyFile     string
+	cmdTimeout  time.Duration
 	ecdhPrivKey *ecdh.PrivateKey
 	trustedKeys = make(map[string]ed25519.PublicKey)
 )
+
+// limitedWriter caps the number of bytes written to buf.
+type limitedWriter struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	remaining := w.limit - w.buf.Len()
+	if remaining <= 0 {
+		w.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+		w.truncated = true
+	}
+	return w.buf.Write(p)
+}
 
 func main() {
 	flag.StringVar(&serverAddr, "server", "localhost:8080", "Server address (host:port)")
 	flag.StringVar(&token, "token", "", "Agent Token (AGENT_...)")
 	flag.StringVar(&handler, "handler", "", "Path to custom script. If set, pipes all incoming JSON to stdin.")
 	flag.StringVar(&keyFile, "key-file", "", "Path to ECDH key file (default: ~/.nerve/agent.key)")
+	flag.DurationVar(&cmdTimeout, "timeout", 60*time.Second, "Max execution time per command")
 	flag.Parse()
 
 	if token == "" {
@@ -83,12 +108,37 @@ func main() {
 		scheme = "wss"
 	}
 	u := url.URL{Scheme: scheme, Host: serverAddr, Path: "/api/v1/stream", RawQuery: "token=" + token}
-	log.Printf("Connecting to %s", u.String())
 
+	// Log connection target without the token in the URL
+	tokenPreview := token
+	if len(tokenPreview) > 8 {
+		tokenPreview = tokenPreview[:8] + "..."
+	}
+	log.Printf("Connecting to %s%s (token: %s)", u.Host, u.Path, tokenPreview)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	delay := 2 * time.Second
 	for {
-		connectAndListen(u.String())
-		log.Println("Disconnected. Retrying in 5s...")
-		time.Sleep(5 * time.Second)
+		connectAndListen(ctx, u.String())
+		select {
+		case <-ctx.Done():
+			log.Println("Shutting down.")
+			return
+		default:
+		}
+		jitter := time.Duration(mathrand.Int63n(int64(delay / 2)))
+		log.Printf("Disconnected. Retrying in %v...", delay+jitter)
+		select {
+		case <-time.After(delay + jitter):
+		case <-ctx.Done():
+			log.Println("Shutting down.")
+			return
+		}
+		if delay < 64*time.Second {
+			delay *= 2
+		}
 	}
 }
 
@@ -121,13 +171,23 @@ func loadOrGenerateECDHKey(path string) (*ecdh.PrivateKey, error) {
 	return key, nil
 }
 
-func connectAndListen(addr string) {
-	c, _, err := websocket.DefaultDialer.Dial(addr, nil)
+func connectAndListen(ctx context.Context, addr string) {
+	c, _, err := websocket.DefaultDialer.DialContext(ctx, addr, nil)
 	if err != nil {
-		log.Printf("Dial error: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("Dial error: %v", err)
+		}
 		return
 	}
 	defer c.Close()
+
+	// Close WebSocket when context is cancelled (shutdown signal)
+	go func() {
+		<-ctx.Done()
+		c.WriteMessage(websocket.CloseMessage, //nolint:errcheck
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "shutting down"))
+		c.Close()
+	}()
 
 	log.Println("✅ Connected to Nerve Server")
 
@@ -319,7 +379,12 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	}
 
 	// Verify Ed25519 signature on plaintext payload
-	sigBytes, _ := base64.StdEncoding.DecodeString(env.Signature)
+	sigBytes, err := base64.StdEncoding.DecodeString(env.Signature)
+	if err != nil {
+		log.Printf("Invalid signature encoding: %v", err)
+		sendReply(conn, env.ChannelID, "Error: Invalid Signature", "error", iosECDHPubkey)
+		return
+	}
 	if !ed25519.Verify(pubKey, []byte(payloadToVerify), sigBytes) {
 		sendReply(conn, env.ChannelID, "Error: Invalid Signature", "error", iosECDHPubkey)
 		return
@@ -336,12 +401,22 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		// Pass decrypted envelope as JSON to handler stdin
 		handlerEnv := env
 		handlerEnv.Payload = payloadToVerify
-		envJSON, _ := json.Marshal(handlerEnv)
+		envJSON, err := json.Marshal(handlerEnv)
+		if err != nil {
+			sendReply(conn, env.ChannelID, fmt.Sprintf("Error: marshal handler env: %v", err), "error", iosECDHPubkey)
+			return
+		}
 		cmd.Stdin = bytes.NewReader(envJSON)
 
-		out, err := cmd.CombinedOutput()
-		output := string(out)
-
+		const maxOutputBytes = 512 * 1024
+		lw := &limitedWriter{limit: maxOutputBytes}
+		cmd.Stdout = lw
+		cmd.Stderr = lw
+		err = cmd.Run()
+		output := lw.buf.String()
+		if lw.truncated {
+			output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
+		}
 		if ctx.Err() == context.DeadlineExceeded {
 			output += "\n[Error] Handler timed out (30s limit)."
 		} else if err != nil {
@@ -364,25 +439,33 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		return
 	}
 
-	// Replay Protection (30s window)
-	if time.Since(time.UnixMilli(cmdObj.Ts)) > 30*time.Second {
+	// Replay Protection: reject commands older than 30s or more than 10s in the future
+	age := time.Since(time.UnixMilli(cmdObj.Ts))
+	if age > 30*time.Second || age < -10*time.Second {
 		sendReply(conn, env.ChannelID, "Error: Command Expired (Replay Protection)", "error", iosECDHPubkey)
 		return
 	}
 
-	// Execute Shell with Timeout
+	// Execute Shell with configurable timeout
 	realCmd := cmdObj.Cmd
-	log.Printf("🚀 Executing: %s", realCmd)
+	log.Printf("Executing: %s", realCmd)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	execCtx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", realCmd)
-	out, err := cmd.CombinedOutput()
-	output := string(out)
+	const maxOutputBytes = 512 * 1024
+	lw := &limitedWriter{limit: maxOutputBytes}
+	cmd := exec.CommandContext(execCtx, "sh", "-c", realCmd)
+	cmd.Stdout = lw
+	cmd.Stderr = lw
+	err = cmd.Run()
 
-	if ctx.Err() == context.DeadlineExceeded {
-		output += "\n[Error] Command timed out (5s limit)."
+	output := lw.buf.String()
+	if lw.truncated {
+		output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
+	}
+	if execCtx.Err() == context.DeadlineExceeded {
+		output += fmt.Sprintf("\n[Error] Command timed out (%v limit).", cmdTimeout)
 	} else if err != nil {
 		output += fmt.Sprintf("\nError: %v", err)
 	}

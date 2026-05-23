@@ -27,15 +27,16 @@ import (
 )
 
 type Envelope struct {
-	ID         string `json:"id"`
-	ChannelID  string `json:"channel_id"`
-	Text       string `json:"text"`
-	Sender     string `json:"sender"`
-	Severity   string `json:"severity"`
-	Payload    string `json:"payload_raw"` // raw string preserved for Ed25519 verification
-	Signature  string `json:"signature"`
-	Pubkey     string `json:"pubkey"`
-	ECDHPubkey string `json:"ecdh_pubkey,omitempty"`
+	ID             string `json:"id"`
+	ChannelID      string `json:"channel_id"`
+	Text           string `json:"text"`
+	Sender         string `json:"sender"`
+	Severity       string `json:"severity"`
+	Payload        string `json:"payload_raw"` // raw string preserved for Ed25519 verification
+	Signature      string `json:"signature"`
+	Pubkey         string `json:"pubkey"`
+	ECDHPubkey     string `json:"ecdh_pubkey,omitempty"`
+	EncryptionMode string `json:"encryption_mode,omitempty"`
 }
 
 type KeyringUpdate struct {
@@ -274,11 +275,16 @@ func sendReply(conn *websocket.Conn, channelID, text, severity, iosECDHPubkey st
 		}
 	}
 
+	encMode := ""
+	if ecdhPubkey != "" {
+		encMode = "ecdh-aes-gcm"
+	}
 	msg := Envelope{
-		ChannelID:  channelID,
-		Text:       replyText,
-		Severity:   severity,
-		ECDHPubkey: ecdhPubkey,
+		ChannelID:      channelID,
+		Text:           replyText,
+		Severity:       severity,
+		ECDHPubkey:     ecdhPubkey,
+		EncryptionMode: encMode,
 	}
 	conn.WriteJSON(msg) //nolint:errcheck
 }

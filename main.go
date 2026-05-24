@@ -232,6 +232,15 @@ func connectAndListen(ctx context.Context, addr string) {
 	}
 }
 
+// updateKeyring replaces the trusted key list with keys from the backend.
+//
+// SECURITY NOTE (issue #23): This agent blindly trusts keyring_update messages
+// received from the backend over the WebSocket connection. This is a known
+// architectural limitation and zero-knowledge violation, but is accepted for
+// the current phase of the project. In a fully zero-knowledge system, the agent
+// would need to verify keyring updates through an out-of-band mechanism or
+// cryptographic proof. For now, we assume the WebSocket connection to the backend
+// is authenticated and trusted via the agent token.
 func updateKeyring(keys []string) {
 	trustedKeys = make(map[string]ed25519.PublicKey)
 	count := 0
@@ -397,7 +406,13 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, handler)
+		// Parse handler arguments (issue #34)
+		parts := strings.Fields(handler)
+		if len(parts) == 0 {
+			sendReply(conn, env.ChannelID, "Error: handler flag is empty", "error", iosECDHPubkey)
+			return
+		}
+		cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 		// Pass decrypted envelope as JSON to handler stdin
 		handlerEnv := env
 		handlerEnv.Payload = payloadToVerify

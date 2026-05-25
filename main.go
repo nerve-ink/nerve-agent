@@ -48,13 +48,14 @@ type KeyringUpdate struct {
 }
 
 var (
-	serverAddr  string
-	token       string
-	handler     string
-	keyFile     string
-	cmdTimeout  time.Duration
-	ecdhPrivKey *ecdh.PrivateKey
-	trustedKeys = make(map[string]ed25519.PublicKey)
+	serverAddr          string
+	token               string
+	handler             string
+	keyFile             string
+	cmdTimeout          time.Duration
+	ecdhPrivKey         *ecdh.PrivateKey
+	trustedKeys         = make(map[string]ed25519.PublicKey)
+	symmetricChannelKey []byte
 )
 
 // limitedWriter caps the number of bytes written to buf.
@@ -216,6 +217,18 @@ func connectAndListen(ctx context.Context, addr string) {
 			continue
 		}
 
+		// Try parsing as Channel Key
+		var chKey struct {
+			Type string `json:"type"`
+			Key  string `json:"key"`
+		}
+		if err := json.Unmarshal(message, &chKey); err == nil && chKey.Type == "channel_key" {
+			if err := assimilateChannelKey(chKey.Key); err != nil {
+				log.Printf("❌ Failed to assimilate channel key: %v", err)
+			}
+			continue
+		}
+
 		// Try parsing as Envelope
 		var env Envelope
 		if err := json.Unmarshal(message, &env); err != nil {
@@ -252,6 +265,75 @@ func updateKeyring(keys []string) {
 		}
 	}
 	log.Printf("🔑 Updated Keyring: %d trusted keys", count)
+}
+
+func assimilateChannelKey(payload string) error {
+	parts := strings.Split(payload, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid channel key payload format")
+	}
+	senderPubKey := parts[0]
+	encryptedBox := parts[1]
+
+	rawKeyBase64, err := decryptPayload(encryptedBox, senderPubKey)
+	if err != nil {
+		return fmt.Errorf("decrypt capsule: %w", err)
+	}
+
+	key, err := base64.StdEncoding.DecodeString(rawKeyBase64)
+	if err != nil {
+		return fmt.Errorf("decode raw key: %w", err)
+	}
+	if len(key) != 32 {
+		return fmt.Errorf("invalid channel key length: %d", len(key))
+	}
+	symmetricChannelKey = key
+	log.Printf("🔑 Gracefully assimilated symmetric channel key")
+	return nil
+}
+
+func decryptSymmetric(ciphertextB64 string, key []byte) (string, error) {
+	combined, err := base64.StdEncoding.DecodeString(ciphertextB64)
+	if err != nil {
+		return "", fmt.Errorf("decode ciphertext: %w", err)
+	}
+	if len(combined) < 12 {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := combined[:12], combined[12:]
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("AES-GCM decrypt: %w", err)
+	}
+	return string(plaintext), nil
+}
+
+func encryptSymmetric(plaintext string, key []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
 func deriveSharedKey(peerECDHPubB64 string) ([]byte, error) {
@@ -332,28 +414,34 @@ func encryptPayload(plaintext, recipientECDHPubB64 string) (string, error) {
 
 func sendReply(conn *websocket.Conn, channelID, text, severity, iosECDHPubkey string) {
 	replyText := text
-	ecdhPubkey := ""
+	encMode := ""
 
-	if iosECDHPubkey != "" {
-		encrypted, err := encryptPayload(text, iosECDHPubkey)
+	if len(symmetricChannelKey) > 0 {
+		encrypted, err := encryptSymmetric(text, symmetricChannelKey)
 		if err != nil {
-			log.Printf("⚠️  Reply encryption failed: %v — sending plaintext", err)
+			log.Printf("⚠️  Reply symmetric encryption failed: %v — sending plaintext", err)
 		} else {
 			replyText = encrypted
-			ecdhPubkey = base64.StdEncoding.EncodeToString(ecdhPrivKey.PublicKey().Bytes())
+			encMode = "e2e"
+		}
+	} else if iosECDHPubkey != "" {
+		encrypted, err := encryptPayload(text, iosECDHPubkey)
+		if err != nil {
+			log.Printf("⚠️  Reply ECDH encryption failed: %v — sending plaintext", err)
+		} else {
+			replyText = encrypted
+			encMode = "ecdh-aes-gcm"
 		}
 	}
 
-	encMode := ""
-	if ecdhPubkey != "" {
-		encMode = "ecdh-aes-gcm"
-	}
 	msg := Envelope{
 		ChannelID:      channelID,
 		Text:           replyText,
 		Severity:       severity,
-		ECDHPubkey:     ecdhPubkey,
 		EncryptionMode: encMode,
+	}
+	if encMode == "ecdh-aes-gcm" {
+		msg.ECDHPubkey = base64.StdEncoding.EncodeToString(ecdhPrivKey.PublicKey().Bytes())
 	}
 	conn.WriteJSON(msg) //nolint:errcheck
 }
@@ -376,7 +464,21 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 
 	// Decrypt payload if E2E encrypted
 	payloadToVerify := env.Payload
-	if env.ECDHPubkey != "" {
+	if env.EncryptionMode == "e2e" {
+		if len(symmetricChannelKey) == 0 {
+			log.Printf("❌ Symmetric channel key not assimilated yet")
+			sendReply(conn, env.ChannelID, "Error: Symmetric channel key missing", "error", iosECDHPubkey)
+			return
+		}
+		decrypted, err := decryptSymmetric(env.Payload, symmetricChannelKey)
+		if err != nil {
+			log.Printf("❌ Decryption failed: %v", err)
+			sendReply(conn, env.ChannelID, "Error: Decryption failed", "error", iosECDHPubkey)
+			return
+		}
+		payloadToVerify = decrypted
+		log.Printf("🔓 Payload decrypted successfully using symmetric channel key")
+	} else if env.ECDHPubkey != "" {
 		decrypted, err := decryptPayload(env.Payload, env.ECDHPubkey)
 		if err != nil {
 			log.Printf("❌ Decryption failed: %v", err)
@@ -384,7 +486,7 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 			return
 		}
 		payloadToVerify = decrypted
-		log.Printf("🔓 Payload decrypted successfully")
+		log.Printf("🔓 Payload decrypted successfully using ECDH")
 	}
 
 	// Verify Ed25519 signature on plaintext payload

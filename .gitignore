@@ -1,0 +1,24 @@
+# Secrets and local config
+.env
+.env.*
+*.env
+!.env.example
+*.key
+*.pem
+*.p8
+*.p12
+*.crt
+
+# Build artifacts
+nerve-agent
+nerve-agent-*
+*.out
+dist/
+build/
+coverage/
+
+# Local OS/editor noise
+.DS_Store
+*.swp
+*.swo
+*~

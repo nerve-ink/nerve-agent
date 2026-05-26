@@ -1,0 +1,24 @@
+[Unit]
+Description=Nerve Agent
+Documentation=https://github.com/nerve-ink/nerve-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nerve-agent
+Group=nerve-agent
+EnvironmentFile=/etc/nerve-agent.env
+StateDirectory=nerve-agent
+WorkingDirectory=/var/lib/nerve-agent
+ExecStart=/usr/local/bin/nerve-agent -server ${NERVE_SERVER} -token ${NERVE_AGENT_TOKEN} -key-file /var/lib/nerve-agent/agent.key
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/nerve-agent
+
+[Install]
+WantedBy=multi-user.target

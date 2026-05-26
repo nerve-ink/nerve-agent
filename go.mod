@@ -1,4 +1,4 @@
-module nerve-agent
+module github.com/nerve-ink/nerve-agent
 
 go 1.25.5
 

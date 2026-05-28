@@ -4,6 +4,12 @@
 agent token like a production secret and run the process with the least
 privileges your workflow allows.
 
+The agent sends its relay token in the WebSocket `Authorization: Bearer` header.
+Avoid putting agent tokens in command history, logs, process managers with loose
+permissions, or URLs. Older relays may still accept a `?token=` fallback, but
+that path can leak through proxy and access logs and should be treated as
+deprecated.
+
 ## Recommended Deployment
 
 - Run the agent as a dedicated unprivileged user.

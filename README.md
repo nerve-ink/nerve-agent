@@ -22,6 +22,8 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 ## Connect
 
 Create a channel in the Nerve iOS app, open **Agent Setup**, then copy the token.
+The agent authenticates its WebSocket connection with an `Authorization: Bearer`
+header, so the token is not placed in the URL.
 
 ```bash
 nerve-agent -server api.nerve.ink:443 -token YOUR_AGENT_TOKEN

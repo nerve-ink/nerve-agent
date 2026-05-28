@@ -108,7 +108,7 @@ func main() {
 	if !strings.HasPrefix(serverAddr, "localhost") && !strings.HasPrefix(serverAddr, "127.") {
 		scheme = "wss"
 	}
-	u := url.URL{Scheme: scheme, Host: serverAddr, Path: "/api/v1/stream", RawQuery: "token=" + token}
+	u := url.URL{Scheme: scheme, Host: serverAddr, Path: "/api/v1/stream"}
 
 	// Log connection target without the token in the URL
 	tokenPreview := token
@@ -173,7 +173,10 @@ func loadOrGenerateECDHKey(path string) (*ecdh.PrivateKey, error) {
 }
 
 func connectAndListen(ctx context.Context, addr string) {
-	c, _, err := websocket.DefaultDialer.DialContext(ctx, addr, nil)
+	headers := make(map[string][]string)
+	headers["Authorization"] = []string{"Bearer " + token}
+
+	c, _, err := websocket.DefaultDialer.DialContext(ctx, addr, headers)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("Dial error: %v", err)

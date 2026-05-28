@@ -35,6 +35,7 @@ type Envelope struct {
 	Text           string `json:"text"`
 	Sender         string `json:"sender"`
 	Severity       string `json:"severity"`
+	Kind           string `json:"kind,omitempty"`
 	Payload        string `json:"payload_raw"` // raw string preserved for Ed25519 verification
 	Signature      string `json:"signature"`
 	Pubkey         string `json:"pubkey"`
@@ -244,8 +245,17 @@ func connectAndListen(ctx context.Context, addr string) {
 			iosECDHPubkey = env.ECDHPubkey
 		}
 
+		if !shouldHandleEnvelope(env) {
+			log.Printf("↩️ Ignoring non-command envelope kind=%q from %s", env.Kind, env.Sender)
+			continue
+		}
+
 		handleMessage(c, env, iosECDHPubkey)
 	}
+}
+
+func shouldHandleEnvelope(env Envelope) bool {
+	return env.Kind == "command"
 }
 
 // updateKeyring replaces the trusted key list with keys from the backend.

@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 )
 
 func TestShouldHandleEnvelopeOnlyCommands(t *testing.T) {
@@ -48,5 +50,36 @@ func TestUpdateKeyringSkipsMalformedKeys(t *testing.T) {
 	}
 	if _, ok := trustedKeys[good]; !ok {
 		t.Fatalf("trusted key %q was not installed", good)
+	}
+}
+
+func TestCommandReplyOutputAlwaysReturnsVisibleText(t *testing.T) {
+	if got := commandReplyOutput("", false, 512*1024, false, time.Second, nil); got != "[Command completed with no output]" {
+		t.Fatalf("empty output = %q", got)
+	}
+
+	got := commandReplyOutput("stdout", true, 512*1024, false, time.Second, errors.New("exit status 1"))
+	if want := "stdout\n[Output truncated at 512KB]\nError: exit status 1"; got != want {
+		t.Fatalf("command output = %q, want %q", got, want)
+	}
+}
+
+func TestHandlerReplyOutputAlwaysReturnsVisibleText(t *testing.T) {
+	if got := handlerReplyOutput("  \n", false, 512*1024, false, nil); got != "[Handler completed with no output]" {
+		t.Fatalf("empty handler output = %q", got)
+	}
+
+	got := handlerReplyOutput("partial", false, 512*1024, true, nil)
+	if want := "partial\n[Error] Handler timed out (30s limit)."; got != want {
+		t.Fatalf("handler timeout output = %q, want %q", got, want)
+	}
+}
+
+func TestPreviewDoesNotPanicOnShortValues(t *testing.T) {
+	if got := preview("abc", 8); got != "abc" {
+		t.Fatalf("short preview = %q", got)
+	}
+	if got := preview("abcdefghijk", 8); got != "abcdefgh" {
+		t.Fatalf("long preview = %q", got)
 	}
 }

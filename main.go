@@ -79,6 +79,36 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
+func commandReplyOutput(output string, truncated bool, maxOutputBytes int, timedOut bool, timeout time.Duration, err error) string {
+	if truncated {
+		output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
+	}
+	if timedOut {
+		output += fmt.Sprintf("\n[Error] Command timed out (%v limit).", timeout)
+	} else if err != nil {
+		output += fmt.Sprintf("\nError: %v", err)
+	}
+	if strings.TrimSpace(output) == "" {
+		return "[Command completed with no output]"
+	}
+	return output
+}
+
+func handlerReplyOutput(output string, truncated bool, maxOutputBytes int, timedOut bool, err error) string {
+	if truncated {
+		output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
+	}
+	if timedOut {
+		output += "\n[Error] Handler timed out (30s limit)."
+	} else if err != nil {
+		output += fmt.Sprintf("\nError: %v", err)
+	}
+	if strings.TrimSpace(output) == "" {
+		return "[Handler completed with no output]"
+	}
+	return output
+}
+
 func main() {
 	flag.StringVar(&serverAddr, "server", "localhost:8080", "Server address (host:port)")
 	flag.StringVar(&token, "token", "", "Agent Token (AGENT_...)")
@@ -425,7 +455,7 @@ func encryptPayload(plaintext, recipientECDHPubB64 string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-func sendReply(conn *websocket.Conn, channelID, text, severity, iosECDHPubkey string) {
+func sendReply(conn *websocket.Conn, channelID, text, severity, iosECDHPubkey string) error {
 	replyText := text
 	encMode := ""
 
@@ -451,12 +481,37 @@ func sendReply(conn *websocket.Conn, channelID, text, severity, iosECDHPubkey st
 		ChannelID:      channelID,
 		Text:           replyText,
 		Severity:       severity,
+		Kind:           "agent_reply",
 		EncryptionMode: encMode,
 	}
 	if encMode == "ecdh-aes-gcm" {
 		msg.ECDHPubkey = base64.StdEncoding.EncodeToString(ecdhPrivKey.PublicKey().Bytes())
 	}
-	conn.WriteJSON(msg) //nolint:errcheck
+	if err := conn.WriteJSON(msg); err != nil {
+		return fmt.Errorf("write reply: %w", err)
+	}
+	log.Printf("📤 Reply sent (mode=%s, plaintext_bytes=%d)", replyModeLabel(encMode), len(text))
+	return nil
+}
+
+func replyModeLabel(encMode string) string {
+	if encMode == "" {
+		return "plaintext"
+	}
+	return encMode
+}
+
+func preview(value string, n int) string {
+	if len(value) <= n {
+		return value
+	}
+	return value[:n]
+}
+
+func sendReplyLogged(conn *websocket.Conn, channelID, text, severity, iosECDHPubkey string) {
+	if err := sendReply(conn, channelID, text, severity, iosECDHPubkey); err != nil {
+		log.Printf("❌ Reply send failed: %v", err)
+	}
 }
 
 func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
@@ -464,14 +519,14 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 
 	// Verify Signature
 	if env.Pubkey == "" || env.Signature == "" {
-		sendReply(conn, env.ChannelID, "Error: Missing signature", "error", iosECDHPubkey)
+		sendReplyLogged(conn, env.ChannelID, "Error: Missing signature", "error", iosECDHPubkey)
 		return
 	}
 
 	// Check if Pubkey is trusted
 	pubKey, trusted := trustedKeys[env.Pubkey]
 	if !trusted {
-		sendReply(conn, env.ChannelID, fmt.Sprintf("Error: Untrusted Key %s...", env.Pubkey[:8]), "error", iosECDHPubkey)
+		sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Error: Untrusted Key %s...", preview(env.Pubkey, 8)), "error", iosECDHPubkey)
 		return
 	}
 
@@ -480,13 +535,13 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	if env.EncryptionMode == "e2e" {
 		if len(symmetricChannelKey) == 0 {
 			log.Printf("❌ Symmetric channel key not assimilated yet")
-			sendReply(conn, env.ChannelID, "Error: Symmetric channel key missing", "error", iosECDHPubkey)
+			sendReplyLogged(conn, env.ChannelID, "Error: Symmetric channel key missing", "error", iosECDHPubkey)
 			return
 		}
 		decrypted, err := decryptSymmetric(env.Payload, symmetricChannelKey)
 		if err != nil {
 			log.Printf("❌ Decryption failed: %v", err)
-			sendReply(conn, env.ChannelID, "Error: Decryption failed", "error", iosECDHPubkey)
+			sendReplyLogged(conn, env.ChannelID, "Error: Decryption failed", "error", iosECDHPubkey)
 			return
 		}
 		payloadToVerify = decrypted
@@ -495,7 +550,7 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		decrypted, err := decryptPayload(env.Payload, env.ECDHPubkey)
 		if err != nil {
 			log.Printf("❌ Decryption failed: %v", err)
-			sendReply(conn, env.ChannelID, "Error: Decryption failed", "error", iosECDHPubkey)
+			sendReplyLogged(conn, env.ChannelID, "Error: Decryption failed", "error", iosECDHPubkey)
 			return
 		}
 		payloadToVerify = decrypted
@@ -506,11 +561,11 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	sigBytes, err := base64.StdEncoding.DecodeString(env.Signature)
 	if err != nil {
 		log.Printf("Invalid signature encoding: %v", err)
-		sendReply(conn, env.ChannelID, "Error: Invalid Signature", "error", iosECDHPubkey)
+		sendReplyLogged(conn, env.ChannelID, "Error: Invalid Signature", "error", iosECDHPubkey)
 		return
 	}
 	if !ed25519.Verify(pubKey, []byte(payloadToVerify), sigBytes) {
-		sendReply(conn, env.ChannelID, "Error: Invalid Signature", "error", iosECDHPubkey)
+		sendReplyLogged(conn, env.ChannelID, "Error: Invalid Signature", "error", iosECDHPubkey)
 		return
 	}
 
@@ -524,7 +579,7 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		// Parse handler arguments (issue #34)
 		parts := strings.Fields(handler)
 		if len(parts) == 0 {
-			sendReply(conn, env.ChannelID, "Error: handler flag is empty", "error", iosECDHPubkey)
+			sendReplyLogged(conn, env.ChannelID, "Error: handler flag is empty", "error", iosECDHPubkey)
 			return
 		}
 		cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
@@ -533,7 +588,7 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		handlerEnv.Payload = payloadToVerify
 		envJSON, err := json.Marshal(handlerEnv)
 		if err != nil {
-			sendReply(conn, env.ChannelID, fmt.Sprintf("Error: marshal handler env: %v", err), "error", iosECDHPubkey)
+			sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Error: marshal handler env: %v", err), "error", iosECDHPubkey)
 			return
 		}
 		cmd.Stdin = bytes.NewReader(envJSON)
@@ -543,19 +598,8 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		cmd.Stdout = lw
 		cmd.Stderr = lw
 		err = cmd.Run()
-		output := lw.buf.String()
-		if lw.truncated {
-			output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
-		}
-		if ctx.Err() == context.DeadlineExceeded {
-			output += "\n[Error] Handler timed out (30s limit)."
-		} else if err != nil {
-			output += fmt.Sprintf("\nError: %v", err)
-		}
-
-		if strings.TrimSpace(output) != "" {
-			sendReply(conn, env.ChannelID, output, "info", iosECDHPubkey)
-		}
+		output := handlerReplyOutput(lw.buf.String(), lw.truncated, maxOutputBytes, ctx.Err() == context.DeadlineExceeded, err)
+		sendReplyLogged(conn, env.ChannelID, output, "info", iosECDHPubkey)
 		return
 	}
 
@@ -565,14 +609,14 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		Ts  int64  `json:"ts"`
 	}
 	if err := json.Unmarshal([]byte(payloadToVerify), &cmdObj); err != nil {
-		sendReply(conn, env.ChannelID, "Error: Invalid Payload JSON", "error", iosECDHPubkey)
+		sendReplyLogged(conn, env.ChannelID, "Error: Invalid Payload JSON", "error", iosECDHPubkey)
 		return
 	}
 
 	// Replay Protection: reject commands older than 30s or more than 10s in the future
 	age := time.Since(time.UnixMilli(cmdObj.Ts))
 	if age > 30*time.Second || age < -10*time.Second {
-		sendReply(conn, env.ChannelID, "Error: Command Expired (Replay Protection)", "error", iosECDHPubkey)
+		sendReplyLogged(conn, env.ChannelID, "Error: Command Expired (Replay Protection)", "error", iosECDHPubkey)
 		return
 	}
 
@@ -591,14 +635,7 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	err = cmd.Run()
 
 	output := lw.buf.String()
-	if lw.truncated {
-		output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
-	}
-	if execCtx.Err() == context.DeadlineExceeded {
-		output += fmt.Sprintf("\n[Error] Command timed out (%v limit).", cmdTimeout)
-	} else if err != nil {
-		output += fmt.Sprintf("\nError: %v", err)
-	}
-
-	sendReply(conn, env.ChannelID, output, "info", iosECDHPubkey)
+	log.Printf("✅ Command finished (stdout_stderr_bytes=%d, err=%v)", len(output), err)
+	output = commandReplyOutput(output, lw.truncated, maxOutputBytes, execCtx.Err() == context.DeadlineExceeded, cmdTimeout, err)
+	sendReplyLogged(conn, env.ChannelID, output, "info", iosECDHPubkey)
 }

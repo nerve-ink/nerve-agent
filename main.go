@@ -59,6 +59,11 @@ var (
 	symmetricChannelKey []byte
 )
 
+var (
+	commandECDHSalt = []byte("nerve.command.ecdh.hkdf.salt.v1")
+	commandECDHInfo = []byte("nerve.command.ecdh.aes-gcm.v1")
+)
+
 // limitedWriter caps the number of bytes written to buf.
 type limitedWriter struct {
 	buf       bytes.Buffer
@@ -392,8 +397,8 @@ func deriveSharedKey(peerECDHPubB64 string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ECDH: %w", err)
 	}
-	// HKDF-SHA256 with empty salt and info — matches Swift hkdfDerivedSymmetricKey
-	h := hkdf.New(sha256.New, sharedSecret, []byte{}, []byte{})
+	// Domain-separated HKDF-SHA256. Must match NerveCryptoManager.commandECDH*.
+	h := hkdf.New(sha256.New, sharedSecret, commandECDHSalt, commandECDHInfo)
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(h, key); err != nil {
 		return nil, fmt.Errorf("HKDF: %w", err)

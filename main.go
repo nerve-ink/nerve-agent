@@ -99,12 +99,12 @@ func commandReplyOutput(output string, truncated bool, maxOutputBytes int, timed
 	return output
 }
 
-func handlerReplyOutput(output string, truncated bool, maxOutputBytes int, timedOut bool, err error) string {
+func handlerReplyOutput(output string, truncated bool, maxOutputBytes int, timedOut bool, timeout time.Duration, err error) string {
 	if truncated {
 		output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
 	}
 	if timedOut {
-		output += "\n[Error] Handler timed out (30s limit)."
+		output += fmt.Sprintf("\n[Error] Handler timed out (%v limit).", timeout)
 	} else if err != nil {
 		output += fmt.Sprintf("\nError: %v", err)
 	}
@@ -112,6 +112,31 @@ func handlerReplyOutput(output string, truncated bool, maxOutputBytes int, timed
 		return "[Handler completed with no output]"
 	}
 	return output
+}
+
+func runProcessWithTimeout(timeout time.Duration, maxOutputBytes int, stdin io.Reader, name string, args ...string) (string, bool, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	lw := &limitedWriter{limit: maxOutputBytes}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = stdin
+	cmd.Stdout = lw
+	cmd.Stderr = lw
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err == nil {
+			return nil
+		}
+		return cmd.Process.Kill()
+	}
+	cmd.WaitDelay = 2 * time.Second
+
+	err := cmd.Run()
+	return lw.buf.String(), lw.truncated, ctx.Err() == context.DeadlineExceeded, err
 }
 
 func main() {
@@ -578,16 +603,13 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	if handler != "" {
 		log.Printf("🚀 Dispatching to handler: %s", handler)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
 		// Parse handler arguments (issue #34)
 		parts := strings.Fields(handler)
 		if len(parts) == 0 {
 			sendReplyLogged(conn, env.ChannelID, "Error: handler flag is empty", "error", iosECDHPubkey)
 			return
 		}
-		cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+
 		// Pass decrypted envelope as JSON to handler stdin
 		handlerEnv := env
 		handlerEnv.Payload = payloadToVerify
@@ -596,14 +618,10 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 			sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Error: marshal handler env: %v", err), "error", iosECDHPubkey)
 			return
 		}
-		cmd.Stdin = bytes.NewReader(envJSON)
 
 		const maxOutputBytes = 512 * 1024
-		lw := &limitedWriter{limit: maxOutputBytes}
-		cmd.Stdout = lw
-		cmd.Stderr = lw
-		err = cmd.Run()
-		output := handlerReplyOutput(lw.buf.String(), lw.truncated, maxOutputBytes, ctx.Err() == context.DeadlineExceeded, err)
+		output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, bytes.NewReader(envJSON), parts[0], parts[1:]...)
+		output = handlerReplyOutput(output, truncated, maxOutputBytes, timedOut, cmdTimeout, err)
 		sendReplyLogged(conn, env.ChannelID, output, "info", iosECDHPubkey)
 		return
 	}
@@ -629,18 +647,10 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	realCmd := cmdObj.Cmd
 	log.Printf("Executing: %s", realCmd)
 
-	execCtx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
-	defer cancel()
-
 	const maxOutputBytes = 512 * 1024
-	lw := &limitedWriter{limit: maxOutputBytes}
-	cmd := exec.CommandContext(execCtx, "sh", "-c", realCmd)
-	cmd.Stdout = lw
-	cmd.Stderr = lw
-	err = cmd.Run()
+	output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, nil, "sh", "-c", realCmd)
 
-	output := lw.buf.String()
 	log.Printf("✅ Command finished (stdout_stderr_bytes=%d, err=%v)", len(output), err)
-	output = commandReplyOutput(output, lw.truncated, maxOutputBytes, execCtx.Err() == context.DeadlineExceeded, cmdTimeout, err)
+	output = commandReplyOutput(output, truncated, maxOutputBytes, timedOut, cmdTimeout, err)
 	sendReplyLogged(conn, env.ChannelID, output, "info", iosECDHPubkey)
 }

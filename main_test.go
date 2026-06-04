@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,13 +106,31 @@ func TestCommandReplyOutputAlwaysReturnsVisibleText(t *testing.T) {
 }
 
 func TestHandlerReplyOutputAlwaysReturnsVisibleText(t *testing.T) {
-	if got := handlerReplyOutput("  \n", false, 512*1024, false, nil); got != "[Handler completed with no output]" {
+	if got := handlerReplyOutput("  \n", false, 512*1024, false, 30*time.Second, nil); got != "[Handler completed with no output]" {
 		t.Fatalf("empty handler output = %q", got)
 	}
 
-	got := handlerReplyOutput("partial", false, 512*1024, true, nil)
+	got := handlerReplyOutput("partial", false, 512*1024, true, 30*time.Second, nil)
 	if want := "partial\n[Error] Handler timed out (30s limit)."; got != want {
 		t.Fatalf("handler timeout output = %q, want %q", got, want)
+	}
+}
+
+func TestRunProcessWithTimeoutKillsLongRunningCommand(t *testing.T) {
+	start := time.Now()
+	output, truncated, timedOut, err := runProcessWithTimeout(100*time.Millisecond, 512*1024, nil, "sh", "-c", "sleep 5; echo done")
+
+	if !timedOut {
+		t.Fatalf("timedOut = false, err=%v output=%q", err, output)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("timeout took too long: %v", time.Since(start))
+	}
+	if truncated {
+		t.Fatalf("truncated = true")
+	}
+	if strings.Contains(output, "done") {
+		t.Fatalf("command continued after timeout: %q", output)
 	}
 }
 

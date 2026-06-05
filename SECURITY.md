@@ -17,8 +17,23 @@ deprecated.
 - Store the agent ECDH key outside the repository, for example
   `/var/lib/nerve-agent/agent.key`.
 - Avoid running as `root` unless your handler explicitly needs it.
-- Use a small allowlisted handler script for production automation where
-  possible.
+- Use a small allowlisted handler/runbook script for production automation.
+- Prefer explicit local actions such as `restart-nginx` or `deploy-status` over
+  arbitrary shell text typed on a phone.
+- Keep sudoers rules narrow. Allow exact commands, not a general shell.
+- Set a command timeout that matches the expected runbook duration.
+
+## Handler Pattern
+
+The safest production shape is:
+
+1. Nerve delivers a signed command envelope.
+2. `nerve-agent` decrypts it and verifies the Ed25519 signature.
+3. A local handler maps a small set of approved names to exact local commands.
+4. The agent returns encrypted output.
+
+This keeps the useful remote action loop while avoiding a phone-sized SSH
+session with broad host privileges.
 
 ## Known Limitation
 

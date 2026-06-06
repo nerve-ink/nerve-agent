@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +132,20 @@ func TestExecutionSeverity(t *testing.T) {
 	}
 	if got := executionSeverity(false, errors.New("exit status 1")); got != "error" {
 		t.Fatalf("error severity = %q", got)
+	}
+}
+
+func TestFormatDialErrorIncludesHandshakeStatus(t *testing.T) {
+	resp := &http.Response{
+		Status: "409 Conflict",
+		Body:   io.NopCloser(strings.NewReader("Agent already connected\n")),
+	}
+	got := formatDialError(errors.New("websocket: bad handshake"), resp)
+	if !strings.Contains(got, "409 Conflict") {
+		t.Fatalf("dial error missing status: %q", got)
+	}
+	if !strings.Contains(got, "Agent already connected") {
+		t.Fatalf("dial error missing response body: %q", got)
 	}
 }
 

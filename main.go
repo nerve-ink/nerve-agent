@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	mathrand "math/rand"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -246,10 +247,10 @@ func connectAndListen(ctx context.Context, addr string) {
 	headers := make(map[string][]string)
 	headers["Authorization"] = []string{"Bearer " + token}
 
-	c, _, err := websocket.DefaultDialer.DialContext(ctx, addr, headers)
+	c, resp, err := websocket.DefaultDialer.DialContext(ctx, addr, headers)
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("Dial error: %v", err)
+			log.Printf("Dial error: %s", formatDialError(err, resp))
 		}
 		return
 	}
@@ -321,6 +322,25 @@ func connectAndListen(ctx context.Context, addr string) {
 
 		handleMessage(c, env, iosECDHPubkey)
 	}
+}
+
+func formatDialError(err error, resp *http.Response) string {
+	if resp == nil {
+		return err.Error()
+	}
+
+	body := ""
+	if resp.Body != nil {
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
+		_ = resp.Body.Close()
+		if readErr == nil {
+			body = strings.TrimSpace(string(data))
+		}
+	}
+	if body == "" {
+		body = resp.Status
+	}
+	return fmt.Sprintf("%v (%s: %s)", err, resp.Status, body)
 }
 
 func shouldHandleEnvelope(env Envelope) bool {

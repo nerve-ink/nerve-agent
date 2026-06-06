@@ -1,5 +1,10 @@
 # Nerve Agent
 
+[![Website](https://img.shields.io/badge/website-nerve.ink-111214)](https://nerve.ink)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nerve-ink/nerve-agent.svg)](https://pkg.go.dev/github.com/nerve-ink/nerve-agent)
+
+[Website](https://nerve.ink) · [Docs](https://nerve.ink/docs.html) · [Send signals with nerve-cli](https://github.com/nerve-ink/nerve-cli)
+
 `nerve-agent` is the server-side action runner for Nerve. It connects to the
 Nerve relay, receives E2E-encrypted command envelopes, verifies Ed25519
 signatures, executes trusted commands, and returns encrypted output.

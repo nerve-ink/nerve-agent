@@ -103,6 +103,11 @@ func TestCommandReplyOutputAlwaysReturnsVisibleText(t *testing.T) {
 	if want := "stdout\n[Output truncated at 512KB]\nError: exit status 1"; got != want {
 		t.Fatalf("command output = %q, want %q", got, want)
 	}
+
+	got = commandReplyOutput("partial", false, 512*1024, true, 30*time.Second, errors.New("signal: killed"))
+	if want := "[Error] Command timed out (30s limit).\npartial"; got != want {
+		t.Fatalf("command timeout output = %q, want %q", got, want)
+	}
 }
 
 func TestHandlerReplyOutputAlwaysReturnsVisibleText(t *testing.T) {
@@ -111,8 +116,20 @@ func TestHandlerReplyOutputAlwaysReturnsVisibleText(t *testing.T) {
 	}
 
 	got := handlerReplyOutput("partial", false, 512*1024, true, 30*time.Second, nil)
-	if want := "partial\n[Error] Handler timed out (30s limit)."; got != want {
+	if want := "[Error] Handler timed out (30s limit).\npartial"; got != want {
 		t.Fatalf("handler timeout output = %q, want %q", got, want)
+	}
+}
+
+func TestExecutionSeverity(t *testing.T) {
+	if got := executionSeverity(false, nil); got != "info" {
+		t.Fatalf("success severity = %q", got)
+	}
+	if got := executionSeverity(true, nil); got != "error" {
+		t.Fatalf("timeout severity = %q", got)
+	}
+	if got := executionSeverity(false, errors.New("exit status 1")); got != "error" {
+		t.Fatalf("error severity = %q", got)
 	}
 }
 

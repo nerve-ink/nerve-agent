@@ -85,12 +85,13 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 }
 
 func commandReplyOutput(output string, truncated bool, maxOutputBytes int, timedOut bool, timeout time.Duration, err error) string {
+	if timedOut {
+		output = fmt.Sprintf("[Error] Command timed out (%v limit).\n%s", timeout, output)
+	}
 	if truncated {
 		output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
 	}
-	if timedOut {
-		output += fmt.Sprintf("\n[Error] Command timed out (%v limit).", timeout)
-	} else if err != nil {
+	if !timedOut && err != nil {
 		output += fmt.Sprintf("\nError: %v", err)
 	}
 	if strings.TrimSpace(output) == "" {
@@ -100,12 +101,13 @@ func commandReplyOutput(output string, truncated bool, maxOutputBytes int, timed
 }
 
 func handlerReplyOutput(output string, truncated bool, maxOutputBytes int, timedOut bool, timeout time.Duration, err error) string {
+	if timedOut {
+		output = fmt.Sprintf("[Error] Handler timed out (%v limit).\n%s", timeout, output)
+	}
 	if truncated {
 		output += fmt.Sprintf("\n[Output truncated at %dKB]", maxOutputBytes/1024)
 	}
-	if timedOut {
-		output += fmt.Sprintf("\n[Error] Handler timed out (%v limit).", timeout)
-	} else if err != nil {
+	if !timedOut && err != nil {
 		output += fmt.Sprintf("\nError: %v", err)
 	}
 	if strings.TrimSpace(output) == "" {
@@ -137,6 +139,13 @@ func runProcessWithTimeout(timeout time.Duration, maxOutputBytes int, stdin io.R
 
 	err := cmd.Run()
 	return lw.buf.String(), lw.truncated, ctx.Err() == context.DeadlineExceeded, err
+}
+
+func executionSeverity(timedOut bool, err error) string {
+	if timedOut || err != nil {
+		return "error"
+	}
+	return "info"
 }
 
 func main() {
@@ -621,8 +630,11 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 
 		const maxOutputBytes = 512 * 1024
 		output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, bytes.NewReader(envJSON), parts[0], parts[1:]...)
+		if timedOut {
+			log.Printf("⏱️ Handler timed out after %v; killed process group", cmdTimeout)
+		}
 		output = handlerReplyOutput(output, truncated, maxOutputBytes, timedOut, cmdTimeout, err)
-		sendReplyLogged(conn, env.ChannelID, output, "info", iosECDHPubkey)
+		sendReplyLogged(conn, env.ChannelID, output, executionSeverity(timedOut, err), iosECDHPubkey)
 		return
 	}
 
@@ -650,7 +662,11 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	const maxOutputBytes = 512 * 1024
 	output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, nil, "sh", "-c", realCmd)
 
-	log.Printf("✅ Command finished (stdout_stderr_bytes=%d, err=%v)", len(output), err)
+	if timedOut {
+		log.Printf("⏱️ Command timed out after %v; killed process group (stdout_stderr_bytes=%d, err=%v)", cmdTimeout, len(output), err)
+	} else {
+		log.Printf("✅ Command finished (stdout_stderr_bytes=%d, err=%v)", len(output), err)
+	}
 	output = commandReplyOutput(output, truncated, maxOutputBytes, timedOut, cmdTimeout, err)
-	sendReplyLogged(conn, env.ChannelID, output, "info", iosECDHPubkey)
+	sendReplyLogged(conn, env.ChannelID, output, executionSeverity(timedOut, err), iosECDHPubkey)
 }

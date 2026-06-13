@@ -18,20 +18,47 @@ for signed actions on a machine you already trust.
 
 ## Install
 
-Install Go first if it is not already on the machine:
+Copy one block for your machine.
 
-https://go.dev/doc/install
+macOS with Homebrew:
 
-Then install the agent:
+```bash
+command -v brew >/dev/null || {
+  echo "Homebrew is required for this one-liner: https://brew.sh"
+  exit 1
+}
+command -v go >/dev/null || brew install go
+go install github.com/nerve-ink/nerve-agent@latest
+export PATH="$PATH:$(go env GOPATH)/bin"
+nerve-agent -h
+```
+
+Linux x86_64 / ARM64, using the official Go tarball:
+
+```bash
+command -v go >/dev/null || {
+  GO_VERSION="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n 1)"
+  case "$(uname -m)" in
+    x86_64|amd64) GO_ARCH="amd64" ;;
+    aarch64|arm64) GO_ARCH="arm64" ;;
+    *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
+  esac
+  curl -fsSLO "https://go.dev/dl/${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+  sudo rm -rf /usr/local/go
+  sudo tar -C /usr/local -xzf "${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+  export PATH="/usr/local/go/bin:$PATH"
+}
+go install github.com/nerve-ink/nerve-agent@latest
+export PATH="$PATH:$(go env GOPATH)/bin"
+nerve-agent -h
+```
+
+If Go is already installed:
 
 ```bash
 go install github.com/nerve-ink/nerve-agent@latest
-```
-
-Make sure your Go bin directory is on `PATH`:
-
-```bash
 export PATH="$PATH:$(go env GOPATH)/bin"
+nerve-agent -h
 ```
 
 ## Connect

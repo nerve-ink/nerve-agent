@@ -18,22 +18,7 @@ for signed actions on a machine you already trust.
 
 ## Install
 
-Copy one block for your machine.
-
-macOS with Homebrew:
-
-```bash
-command -v brew >/dev/null || {
-  echo "Homebrew is required for this one-liner: https://brew.sh"
-  exit 1
-}
-command -v go >/dev/null || brew install go
-go install github.com/nerve-ink/nerve-agent@latest
-export PATH="$PATH:$(go env GOPATH)/bin"
-nerve-agent -h
-```
-
-Linux x86_64 / ARM64, using the official Go tarball:
+Linux server / VM:
 
 ```bash
 command -v go >/dev/null || {

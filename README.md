@@ -12,7 +12,17 @@ signatures, executes trusted commands, and returns encrypted output.
 The relay should only see encrypted payloads. The agent is the component you run
 on infrastructure you control.
 
+If you only need deploy alerts, cron notifications, or one-way status messages,
+start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli). The agent is
+for signed actions on a machine you already trust.
+
 ## Install
+
+Install Go first if it is not already on the machine:
+
+https://go.dev/doc/install
+
+Then install the agent:
 
 ```bash
 go install github.com/nerve-ink/nerve-agent@latest
@@ -26,13 +36,22 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 ## Connect
 
-Create a pipe in the Nerve iOS app, open Pipe Setup, choose **Run agent**, then
-copy the token. The agent authenticates its WebSocket connection with an
+Create a pipe in the Nerve mobile app, open Pipe Setup, choose **Run agent**,
+then copy the token. The agent authenticates its WebSocket connection with an
 `Authorization: Bearer` header, so the token is not placed in the URL.
 
 ```bash
 nerve-agent -server api.nerve.ink:443 -token YOUR_AGENT_TOKEN
 ```
+
+Now send a one-shot command from the pipe:
+
+```bash
+cat /etc/os-release
+```
+
+The agent verifies the command signature, executes it on the host, and sends the
+output back to the same pipe.
 
 For local backend development:
 
@@ -60,6 +79,14 @@ The agent is a bounded action runner, not SSH or an interactive PTY.
   captured output plus a timeout error back to the pipe.
 - Interactive programs such as `vim`, `top`, or shell sessions are not a V1
   product surface.
+- Long-running checks should be wrapped in scripts that print a bounded summary
+  and exit.
+
+For commands that may run forever, use shell-level limits too:
+
+```bash
+timeout 20s ping 8.8.8.8
+```
 
 ## Handler / Runbook Mode
 
@@ -123,11 +150,17 @@ sudo install -m 0755 "$(go env GOPATH)/bin/nerve-agent" /usr/local/bin/nerve-age
 
 ## Security Model
 
+- The agent can execute commands on the host where you run it.
+- Treat the agent token as a privileged credential.
+- Prefer a locked-down system user and an allowlisted `-handler` for production.
 - Commands must decrypt before execution.
 - Commands must include a valid Ed25519 signature.
 - Signatures are verified against trusted keys sent by the authenticated relay.
 - Commands outside the replay window are rejected.
 - Command output is encrypted before it is sent back when channel keys are ready.
+
+If an agent token leaks, rotate the **Run agent** credential from Pipe Setup and
+restart the agent with the new token.
 
 This project is early. Review `SECURITY.md` before running the agent on
 production infrastructure.

@@ -16,6 +16,15 @@ If you only need deploy alerts, cron notifications, or one-way status messages,
 start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli). The agent is
 for signed actions on a machine you already trust.
 
+## Why the agent is a second step
+
+| Boundary | What happens |
+|---|---|
+| Send-only alerts | Use `nerve-cli` and a sender DSN. It cannot read history, decrypt content, connect as an agent, or execute commands. |
+| Agent token | Connects one trusted host to the action stream. Treat it like host access, not like a webhook URL. |
+| Signed command | The agent decrypts command envelopes and verifies Ed25519 signatures before execution. |
+| Command output | Output is bounded by timeout and returned to the pipe as encrypted content when channel keys are ready. |
+
 ## Install
 
 Linux server / VM:
@@ -167,7 +176,8 @@ sudo install -m 0755 "$(go env GOPATH)/bin/nerve-agent" /usr/local/bin/nerve-age
 - Prefer a locked-down system user and an allowlisted `-handler` for production.
 - Commands must decrypt before execution.
 - Commands must include a valid Ed25519 signature.
-- Signatures are verified against trusted keys sent by the authenticated relay.
+- Signatures are verified against the trusted command keys currently registered
+  for the pipe.
 - Commands outside the replay window are rejected.
 - Command output is encrypted before it is sent back when channel keys are ready.
 

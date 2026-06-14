@@ -42,6 +42,9 @@ That keeps setup simple for the first public agent, but it is not the final
 zero-knowledge trust model. A stronger release should verify keyring updates
 with an out-of-band trust root or cryptographic proof.
 
+This limitation does not affect the send-only signal path. Sender DSNs cannot
+connect as agents, read history, decrypt old content, or execute commands.
+
 ## Reporting
 
 Please report security issues privately through GitHub Security Advisories for

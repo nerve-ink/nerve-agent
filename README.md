@@ -3,7 +3,7 @@
 [![Website](https://img.shields.io/badge/website-nerve.ink-111214)](https://nerve.ink)
 [![Go Reference](https://pkg.go.dev/badge/github.com/nerve-ink/nerve-agent.svg)](https://pkg.go.dev/github.com/nerve-ink/nerve-agent)
 
-[Website](https://nerve.ink) · [Docs](https://nerve.ink/docs.html) · [Send signals with nerve-cli](https://github.com/nerve-ink/nerve-cli)
+[Website](https://nerve.ink) · [App Store](https://apps.apple.com/us/app/nerveops/id6778026992) · [Docs](https://nerve.ink/docs.html) · [Send signals with nerve-cli](https://github.com/nerve-ink/nerve-cli)
 
 `nerve-agent` is the server-side action runner for Nerve. It connects to the
 Nerve relay, receives E2E-encrypted command envelopes, verifies Ed25519
@@ -15,6 +15,9 @@ on infrastructure you control.
 If you only need deploy alerts, cron notifications, or one-way status messages,
 start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli). The agent is
 for signed actions on a machine you already trust.
+
+NerveOps for iOS is available on the
+[App Store](https://apps.apple.com/us/app/nerveops/id6778026992).
 
 ## Why the agent is a second step
 

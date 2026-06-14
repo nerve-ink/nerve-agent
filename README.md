@@ -19,6 +19,29 @@ for signed actions on a machine you already trust.
 NerveOps for iOS is available on the
 [App Store](https://apps.apple.com/us/app/nerveops/id6778026992).
 
+## Run your first agent
+
+1. Install NerveOps from the
+   [App Store](https://apps.apple.com/us/app/nerveops/id6778026992).
+2. Create a pipe, open **Pipe Setup**, and choose **Run agent**.
+3. Copy the agent token.
+4. Start the agent on a Linux server or VM you control:
+
+```bash
+go install github.com/nerve-ink/nerve-agent@latest
+export PATH="$PATH:$(go env GOPATH)/bin"
+nerve-agent -server api.nerve.ink:443 -token YOUR_AGENT_TOKEN
+```
+
+Now send a one-shot command from the pipe:
+
+```bash
+cat /etc/os-release
+```
+
+The agent verifies the command signature, runs it with a timeout, and returns
+encrypted output to the same pipe.
+
 ## Why the agent is a second step
 
 | Boundary | What happens |
@@ -60,9 +83,8 @@ nerve-agent -h
 
 ## Connect
 
-Create a pipe in the Nerve mobile app, open Pipe Setup, choose **Run agent**,
-then copy the token. The agent authenticates its WebSocket connection with an
-`Authorization: Bearer` header, so the token is not placed in the URL.
+The agent authenticates its WebSocket connection with an `Authorization: Bearer`
+header, so the token is not placed in the URL.
 
 ```bash
 nerve-agent -server api.nerve.ink:443 -token YOUR_AGENT_TOKEN

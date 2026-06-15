@@ -5,6 +5,12 @@
 
 [Website](https://nerve.ink) · [App Store](https://apps.apple.com/us/app/nerveops/id6778026992) · [Docs](https://nerve.ink/docs.html) · [Send signals with nerve-cli](https://github.com/nerve-ink/nerve-cli)
 
+Do not start here unless you need actions.
+
+Start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli) for encrypted
+CI/CD, cron and server alerts to iPhone. Use `nerve-agent` only for signed,
+bounded actions on infrastructure you control.
+
 `nerve-agent` is the server-side action runner for Nerve. It connects to the
 Nerve relay, receives E2E-encrypted command envelopes, verifies Ed25519
 signatures, executes trusted commands, and returns encrypted output.
@@ -13,10 +19,9 @@ The relay should only see encrypted payloads. The agent is the component you run
 on infrastructure you control.
 
 If you only need deploy alerts, cron notifications, or one-way status messages,
-start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli). The agent is
-for signed actions on a machine you already trust.
+do not run an agent yet.
 
-NerveOps for iOS is available on the
+NerveOps for iOS is available as a public beta on the
 [App Store](https://apps.apple.com/us/app/nerveops/id6778026992).
 
 ## Run your first agent

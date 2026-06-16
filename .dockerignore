@@ -1,0 +1,16 @@
+.git
+.github
+.DS_Store
+dist
+build
+coverage
+nerve-agent
+nerve-agent-*
+*.out
+*.key
+*.pem
+*.p8
+*.p12
+*.crt
+.env
+.env.*

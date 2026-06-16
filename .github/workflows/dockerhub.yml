@@ -1,0 +1,64 @@
+name: Docker Hub
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish nerve-agent image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve Docker image
+        id: image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "::error title=Missing Docker Hub username::Set repository secret DOCKERHUB_USERNAME."
+            exit 1
+          fi
+          image="${DOCKERHUB_IMAGE:-${DOCKERHUB_USERNAME}/nerve-agent}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.image }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -30,3 +30,6 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Build Docker image
+        run: docker build -t nerve-agent:test .

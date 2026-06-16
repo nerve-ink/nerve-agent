@@ -110,6 +110,23 @@ For local backend development:
 nerve-agent -server localhost:8080 -token YOUR_AGENT_TOKEN
 ```
 
+## Docker
+
+The Docker image is useful when you want the agent to run as a containerized
+worker. Remember that commands execute inside the container namespace. If you
+need host-level administration, use the systemd install path instead, or mount
+only the specific scripts/data the agent is allowed to touch.
+
+```bash
+docker run --rm -it \
+  -v nerve-agent-data:/var/lib/nerve-agent \
+  nerveink/nerve-agent:latest \
+  -server api.nerve.ink:443 \
+  -token YOUR_AGENT_TOKEN
+```
+
+Persist `/var/lib/nerve-agent` so the ECDH key is stable across restarts.
+
 ## Flags
 
 ```text

@@ -135,6 +135,16 @@ docker run --rm -it \
   -token YOUR_AGENT_TOKEN
 ```
 
+GitHub Container Registry mirror:
+
+```bash
+docker run --rm -it \
+  -v nerve-agent-data:/var/lib/nerve-agent \
+  ghcr.io/nerve-ink/nerve-agent:latest \
+  -server api.nerve.ink:443 \
+  -token YOUR_AGENT_TOKEN
+```
+
 Persist `/var/lib/nerve-agent` so the ECDH key is stable across restarts.
 
 ## Flags

@@ -1,4 +1,4 @@
-name: Docker Hub
+name: Containers
 
 on:
   workflow_dispatch:
@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: dockerhub-${{ github.ref }}
@@ -27,31 +28,54 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve Docker image
+      - name: Resolve container images
         id: image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+          GHCR_IMAGE: ${{ vars.GHCR_IMAGE }}
         run: |
           set -euo pipefail
-          if [ -z "$DOCKERHUB_USERNAME" ]; then
-            echo "::error title=Missing Docker Hub username::Set repository secret DOCKERHUB_USERNAME."
-            exit 1
+          ghcr_image="${GHCR_IMAGE:-ghcr.io/${GITHUB_REPOSITORY_OWNER}/nerve-agent}"
+          ghcr_image="$(printf '%s' "$ghcr_image" | tr '[:upper:]' '[:lower:]')"
+          images="$ghcr_image"
+
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::notice title=Docker Hub skipped::Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in nerve-ink/nerve-agent to publish Docker Hub images."
+            echo "dockerhub_enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            image="${DOCKERHUB_IMAGE:-${DOCKERHUB_USERNAME}/nerve-agent}"
+            images="${images}"$'\n'"${image}"
+            echo "dockerhub_enabled=true" >> "$GITHUB_OUTPUT"
           fi
-          image="${DOCKERHUB_IMAGE:-${DOCKERHUB_USERNAME}/nerve-agent}"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "images<<EOF"
+            echo "$images"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        if: ${{ steps.image.outputs.dockerhub_enabled == 'true' }}
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ${{ steps.image.outputs.image }}
+          images: ${{ steps.image.outputs.images }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
             type=ref,event=tag

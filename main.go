@@ -50,6 +50,7 @@ type KeyringUpdate struct {
 }
 
 var (
+	version             = "dev"
 	serverAddr          string
 	token               string
 	handler             string
@@ -150,12 +151,18 @@ func executionSeverity(timedOut bool, err error) string {
 }
 
 func main() {
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.StringVar(&serverAddr, "server", "localhost:8080", "Server address (host:port)")
 	flag.StringVar(&token, "token", "", "Agent Token (AGENT_...)")
 	flag.StringVar(&handler, "handler", "", "Path to custom script. If set, pipes all incoming JSON to stdin.")
 	flag.StringVar(&keyFile, "key-file", "", "Path to ECDH key file (default: ~/.nerve/agent.key)")
 	flag.DurationVar(&cmdTimeout, "timeout", 60*time.Second, "Max execution time per command")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println(version)
+		return
+	}
 
 	if token == "" {
 		log.Fatal("Token is required")

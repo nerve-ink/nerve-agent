@@ -117,6 +117,12 @@ worker. Remember that commands execute inside the container namespace. If you
 need host-level administration, use the systemd install path instead, or mount
 only the specific scripts/data the agent is allowed to touch.
 
+The published image is intentionally minimal. It includes the agent binary,
+Alpine base utilities, and CA certificates; it does not bundle `curl`, `jq`,
+DNS tools, or a general admin toolbox. If your action needs extra tools, build a
+small derived image or mount a narrow handler script with exactly the binaries it
+needs.
+
 This image runs the long-lived `nerve-agent` action runner. It is not the
 send-only `nerve send` CLI path. For one-way CI/CD, cron, and server alerts,
 start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli).

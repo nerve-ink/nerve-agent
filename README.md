@@ -117,10 +117,14 @@ worker. Remember that commands execute inside the container namespace. If you
 need host-level administration, use the systemd install path instead, or mount
 only the specific scripts/data the agent is allowed to touch.
 
+This image runs the long-lived `nerve-agent` action runner. It is not the
+send-only `nerve send` CLI path. For one-way CI/CD, cron, and server alerts,
+start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli).
+
 ```bash
 docker run --rm -it \
   -v nerve-agent-data:/var/lib/nerve-agent \
-  nerveink/nerve-agent:latest \
+  p1xel32/nerve-agent:latest \
   -server api.nerve.ink:443 \
   -token YOUR_AGENT_TOKEN
 ```

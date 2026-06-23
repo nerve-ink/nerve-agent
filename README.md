@@ -155,6 +155,8 @@ Persist `/var/lib/nerve-agent` so the ECDH key is stable across restarts.
 -handler   Optional allowlisted script command. Receives decrypted envelope JSON on stdin.
 -key-file  ECDH private key path. Defaults to ~/.nerve/agent.key.
 -timeout   Max execution time per command. Defaults to 60s.
+-max-output-bytes
+           Max stdout/stderr bytes returned per command. Defaults to 524288.
 ```
 
 ## Command Behavior
@@ -163,8 +165,10 @@ The agent is a bounded action runner, not SSH or an interactive PTY.
 
 - Each command is a one-shot signed action.
 - Commands time out after `-timeout` (default: `60s`).
+- Combined stdout/stderr is capped by `-max-output-bytes` (default: `512KB`).
 - On timeout, the agent kills the whole command process group and sends the
   captured output plus a timeout error back to the pipe.
+- If output exceeds the cap, the reply is truncated and marked as truncated.
 - Interactive programs such as `vim`, `top`, or shell sessions are not a V1
   product surface.
 - Long-running checks should be wrapped in scripts that print a bounded summary

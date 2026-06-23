@@ -167,6 +167,23 @@ func TestRunProcessWithTimeoutKillsLongRunningCommand(t *testing.T) {
 	}
 }
 
+func TestRunProcessWithTimeoutTruncatesOutput(t *testing.T) {
+	output, truncated, timedOut, err := runProcessWithTimeout(time.Second, 4, nil, "sh", "-c", "printf abcdef")
+
+	if err != nil {
+		t.Fatalf("run process: %v", err)
+	}
+	if timedOut {
+		t.Fatalf("timedOut = true")
+	}
+	if !truncated {
+		t.Fatalf("truncated = false")
+	}
+	if output != "abcd" {
+		t.Fatalf("output = %q, want %q", output, "abcd")
+	}
+}
+
 func TestPreviewDoesNotPanicOnShortValues(t *testing.T) {
 	if got := preview("abc", 8); got != "abc" {
 		t.Fatalf("short preview = %q", got)

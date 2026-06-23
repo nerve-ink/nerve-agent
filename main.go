@@ -56,6 +56,7 @@ var (
 	handler             string
 	keyFile             string
 	cmdTimeout          time.Duration
+	maxOutputBytes      int
 	ecdhPrivKey         *ecdh.PrivateKey
 	trustedKeys         = make(map[string]ed25519.PublicKey)
 	symmetricChannelKey []byte
@@ -74,16 +75,20 @@ type limitedWriter struct {
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
+	n := len(p)
 	remaining := w.limit - w.buf.Len()
 	if remaining <= 0 {
 		w.truncated = true
-		return len(p), nil
+		return n, nil
 	}
 	if len(p) > remaining {
 		p = p[:remaining]
 		w.truncated = true
 	}
-	return w.buf.Write(p)
+	if _, err := w.buf.Write(p); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func commandReplyOutput(output string, truncated bool, maxOutputBytes int, timedOut bool, timeout time.Duration, err error) string {
@@ -157,11 +162,16 @@ func main() {
 	flag.StringVar(&handler, "handler", "", "Path to custom script. If set, pipes all incoming JSON to stdin.")
 	flag.StringVar(&keyFile, "key-file", "", "Path to ECDH key file (default: ~/.nerve/agent.key)")
 	flag.DurationVar(&cmdTimeout, "timeout", 60*time.Second, "Max execution time per command")
+	flag.IntVar(&maxOutputBytes, "max-output-bytes", 512*1024, "Max stdout/stderr bytes returned per command")
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Println(version)
 		return
+	}
+
+	if maxOutputBytes <= 0 {
+		log.Fatal("max-output-bytes must be greater than zero")
 	}
 
 	if token == "" {
@@ -655,7 +665,6 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 			return
 		}
 
-		const maxOutputBytes = 512 * 1024
 		output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, bytes.NewReader(envJSON), parts[0], parts[1:]...)
 		if timedOut {
 			log.Printf("⏱️ Handler timed out after %v; killed process group", cmdTimeout)
@@ -686,7 +695,6 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	realCmd := cmdObj.Cmd
 	log.Printf("Executing: %s", realCmd)
 
-	const maxOutputBytes = 512 * 1024
 	output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, nil, "sh", "-c", realCmd)
 
 	if timedOut {

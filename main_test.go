@@ -349,3 +349,75 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 		t.Fatalf("ready = %#v", ready)
 	}
 }
+
+func TestProbeByteStreamSourceLaneDoesNotWriteWhenUnpaired(t *testing.T) {
+	const (
+		streamID  = "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a"
+		routeID   = "9c77044a-934d-4381-a691-c7d7a2e86e07"
+		channelID = "pipe_1"
+		agentTok  = "agent-token"
+		sourceTok = "source-token"
+		sessionID = "source-session"
+	)
+
+	chunkReceived := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/bytes/source-sessions", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(byteStreamSourceSessionResponse{
+			StreamID:        streamID,
+			RouteID:         routeID,
+			SourceUserID:    "agent:" + channelID,
+			SourceSessionID: sessionID,
+			SourceToken:     sourceTok,
+			ExpiresAt:       time.Now().Add(time.Minute).Format(time.RFC3339),
+		})
+	})
+	mux.HandleFunc("/api/v2/bytes/stream", func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade stream: %v", err)
+		}
+		defer ws.Close()
+
+		if err := ws.WriteJSON(byteStreamReadyFrame{
+			Type:     "stream_ready",
+			StreamID: streamID,
+			Side:     "source",
+			Paired:   false,
+		}); err != nil {
+			t.Fatalf("write ready: %v", err)
+		}
+
+		_ = ws.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+		_, _, err = ws.ReadMessage()
+		if err == nil {
+			chunkReceived <- struct{}{}
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	oldServerAddr, oldToken := serverAddr, token
+	serverAddr, token = parsed.Host, agentTok
+	defer func() {
+		serverAddr, token = oldServerAddr, oldToken
+	}()
+
+	ready, err := probeByteStreamSourceLane(channelID, streamID, routeID)
+	if err != nil {
+		t.Fatalf("probe source lane: %v", err)
+	}
+	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" || ready.Paired {
+		t.Fatalf("ready = %#v", ready)
+	}
+	select {
+	case <-chunkReceived:
+		t.Fatal("agent wrote byte chunks before the source lane was paired")
+	default:
+	}
+}

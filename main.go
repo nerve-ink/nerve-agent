@@ -828,6 +828,9 @@ func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamR
 	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" {
 		return byteStreamReadyFrame{}, fmt.Errorf("unexpected source ready frame")
 	}
+	if !ready.Paired {
+		return ready, nil
+	}
 	if err := writeByteStreamSmokeFrames(c, session); err != nil {
 		return byteStreamReadyFrame{}, err
 	}

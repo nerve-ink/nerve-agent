@@ -49,6 +49,34 @@ type KeyringUpdate struct {
 	Keys []string `json:"keys"`
 }
 
+type byteStreamRequestPayload struct {
+	StreamID string `json:"stream_id"`
+	RouteID  string `json:"route_id"`
+	Ts       int64  `json:"ts"`
+}
+
+type byteStreamSourceSessionRequest struct {
+	ChannelID string `json:"channel_id"`
+	StreamID  string `json:"stream_id"`
+	RouteID   string `json:"route_id"`
+}
+
+type byteStreamSourceSessionResponse struct {
+	StreamID        string `json:"stream_id"`
+	RouteID         string `json:"route_id"`
+	SourceUserID    string `json:"source_user_id"`
+	SourceSessionID string `json:"source_session_id"`
+	SourceToken     string `json:"source_token"`
+	ExpiresAt       string `json:"expires_at"`
+}
+
+type byteStreamReadyFrame struct {
+	Type     string `json:"type"`
+	StreamID string `json:"stream_id"`
+	Side     string `json:"side"`
+	Paired   bool   `json:"paired"`
+}
+
 var (
 	version             = "dev"
 	serverAddr          string
@@ -361,7 +389,7 @@ func formatDialError(err error, resp *http.Response) string {
 }
 
 func shouldHandleEnvelope(env Envelope) bool {
-	return env.Kind == "command"
+	return env.Kind == "command" || env.Kind == "byte_stream_request"
 }
 
 // updateKeyring replaces the trusted key list with keys from the backend.
@@ -645,6 +673,11 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 		return
 	}
 
+	if env.Kind == "byte_stream_request" {
+		handleByteStreamRequest(conn, env, payloadToVerify, iosECDHPubkey)
+		return
+	}
+
 	// Dispatch to handler if set
 	if handler != "" {
 		log.Printf("🚀 Dispatching to handler: %s", handler)
@@ -704,4 +737,120 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 	}
 	output = commandReplyOutput(output, truncated, maxOutputBytes, timedOut, cmdTimeout, err)
 	sendReplyLogged(conn, env.ChannelID, output, executionSeverity(timedOut, err), iosECDHPubkey)
+}
+
+func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify, iosECDHPubkey string) {
+	var req byteStreamRequestPayload
+	if err := json.Unmarshal([]byte(payloadToVerify), &req); err != nil {
+		sendReplyLogged(conn, env.ChannelID, "Error: Invalid byte stream request", "error", iosECDHPubkey)
+		return
+	}
+
+	age := time.Since(time.UnixMilli(req.Ts))
+	if age > 30*time.Second || age < -10*time.Second {
+		sendReplyLogged(conn, env.ChannelID, "Error: Byte stream request expired", "error", iosECDHPubkey)
+		return
+	}
+	if strings.TrimSpace(req.StreamID) == "" || strings.TrimSpace(req.RouteID) == "" {
+		sendReplyLogged(conn, env.ChannelID, "Error: Byte stream route missing", "error", iosECDHPubkey)
+		return
+	}
+
+	log.Printf("🧵 Byte stream source probe requested stream=%s route=%s", req.StreamID, preview(req.RouteID, 8))
+	ready, err := probeByteStreamSourceLane(env.ChannelID, req.StreamID, req.RouteID)
+	if err != nil {
+		sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source failed: %v", err), "error", iosECDHPubkey)
+		return
+	}
+
+	status := "waiting"
+	if ready.Paired {
+		status = "paired"
+	}
+	sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s: %s", status, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
+}
+
+func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamReadyFrame, error) {
+	session, err := createByteStreamSourceSession(channelID, streamID, routeID)
+	if err != nil {
+		return byteStreamReadyFrame{}, err
+	}
+
+	u := url.URL{Scheme: websocketSchemeForServer(serverAddr), Host: serverAddr, Path: "/api/v2/bytes/stream"}
+	headers := http.Header{"Authorization": []string{"Bearer " + session.SourceToken}}
+	c, resp, err := websocket.DefaultDialer.Dial(u.String(), headers)
+	if err != nil {
+		return byteStreamReadyFrame{}, fmt.Errorf("open source lane: %s", formatDialError(err, resp))
+	}
+	defer c.Close()
+
+	_, raw, err := c.ReadMessage()
+	if err != nil {
+		return byteStreamReadyFrame{}, fmt.Errorf("read source ready: %w", err)
+	}
+
+	var ready byteStreamReadyFrame
+	if err := json.Unmarshal(raw, &ready); err != nil {
+		return byteStreamReadyFrame{}, fmt.Errorf("decode source ready: %w", err)
+	}
+	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" {
+		return byteStreamReadyFrame{}, fmt.Errorf("unexpected source ready frame")
+	}
+	return ready, nil
+}
+
+func createByteStreamSourceSession(channelID, streamID, routeID string) (byteStreamSourceSessionResponse, error) {
+	endpoint := url.URL{Scheme: httpSchemeForServer(serverAddr), Host: serverAddr, Path: "/api/v2/bytes/source-sessions"}
+	body, err := json.Marshal(byteStreamSourceSessionRequest{
+		ChannelID: channelID,
+		StreamID:  streamID,
+		RouteID:   routeID,
+	})
+	if err != nil {
+		return byteStreamSourceSessionResponse{}, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return byteStreamSourceSessionResponse{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return byteStreamSourceSessionResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	if err != nil {
+		return byteStreamSourceSessionResponse{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var out byteStreamSourceSessionResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return byteStreamSourceSessionResponse{}, err
+	}
+	if out.SourceToken == "" {
+		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session token missing")
+	}
+	return out, nil
+}
+
+func httpSchemeForServer(addr string) string {
+	if strings.HasPrefix(addr, "localhost") || strings.HasPrefix(addr, "127.") {
+		return "http"
+	}
+	return "https"
+}
+
+func websocketSchemeForServer(addr string) string {
+	if strings.HasPrefix(addr, "localhost") || strings.HasPrefix(addr, "127.") {
+		return "ws"
+	}
+	return "wss"
 }

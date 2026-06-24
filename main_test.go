@@ -19,6 +19,7 @@ func TestShouldHandleEnvelopeOnlyCommands(t *testing.T) {
 		want bool
 	}{
 		{name: "command", env: Envelope{Kind: "command"}, want: true},
+		{name: "byte stream request", env: Envelope{Kind: "byte_stream_request"}, want: true},
 		{name: "agent reply", env: Envelope{Kind: "agent_reply"}, want: false},
 		{name: "plain message", env: Envelope{Kind: "message"}, want: false},
 		{name: "missing kind", env: Envelope{}, want: false},

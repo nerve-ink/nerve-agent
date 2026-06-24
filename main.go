@@ -811,41 +811,49 @@ func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamR
 }
 
 func writeByteStreamSmokeFrames(c *websocket.Conn, session byteStreamSourceSessionResponse) error {
-	chunkIndex := uint64(0)
-	chunk := byteStreamFrame{
-		Type:       "chunk",
-		StreamID:   session.StreamID,
-		SessionID:  session.SourceSessionID,
-		ChunkIndex: &chunkIndex,
-		Ciphertext: "agent-smoke-byte-frame",
+	chunks := []string{
+		"agent-smoke-byte-frame-0",
+		"agent-smoke-byte-frame-1",
 	}
-	if err := c.WriteJSON(chunk); err != nil {
-		return fmt.Errorf("write source chunk: %w", err)
-	}
+	var lastChunkIndex uint64
+	for i, ciphertext := range chunks {
+		chunkIndex := uint64(i)
+		lastChunkIndex = chunkIndex
+		chunk := byteStreamFrame{
+			Type:       "chunk",
+			StreamID:   session.StreamID,
+			SessionID:  session.SourceSessionID,
+			ChunkIndex: &chunkIndex,
+			Ciphertext: ciphertext,
+		}
+		if err := c.WriteJSON(chunk); err != nil {
+			return fmt.Errorf("write source chunk %d: %w", chunkIndex, err)
+		}
 
-	if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return fmt.Errorf("set ack read deadline: %w", err)
-	}
-	_, raw, err := c.ReadMessage()
-	_ = c.SetReadDeadline(time.Time{})
-	if err != nil {
-		return fmt.Errorf("read receiver ack: %w", err)
-	}
+		if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return fmt.Errorf("set ack read deadline: %w", err)
+		}
+		_, raw, err := c.ReadMessage()
+		_ = c.SetReadDeadline(time.Time{})
+		if err != nil {
+			return fmt.Errorf("read receiver ack %d: %w", chunkIndex, err)
+		}
 
-	var ack byteStreamFrame
-	if err := json.Unmarshal(raw, &ack); err != nil {
-		return fmt.Errorf("decode receiver ack: %w", err)
+		var ack byteStreamFrame
+		if err := json.Unmarshal(raw, &ack); err != nil {
+			return fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
+		}
+		if ack.Type != "ack" || ack.StreamID != session.StreamID || ack.ChunkIndex == nil || *ack.ChunkIndex != chunkIndex {
+			return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
+		}
+		log.Printf("🧵 Byte stream ack received stream=%s chunk=%d", session.StreamID, chunkIndex)
 	}
-	if ack.Type != "ack" || ack.StreamID != session.StreamID || ack.ChunkIndex == nil || *ack.ChunkIndex != chunkIndex {
-		return fmt.Errorf("unexpected receiver ack frame")
-	}
-	log.Printf("🧵 Byte stream ack received stream=%s chunk=%d", session.StreamID, chunkIndex)
 
 	done := byteStreamFrame{
 		Type:       "done",
 		StreamID:   session.StreamID,
 		SessionID:  session.SourceSessionID,
-		ChunkIndex: &chunkIndex,
+		ChunkIndex: &lastChunkIndex,
 	}
 	if err := c.WriteJSON(done); err != nil {
 		return fmt.Errorf("write source done: %w", err)

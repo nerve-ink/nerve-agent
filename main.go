@@ -53,6 +53,12 @@ type byteStreamRequestPayload struct {
 	StreamID string `json:"stream_id"`
 	RouteID  string `json:"route_id"`
 	Ts       int64  `json:"ts"`
+	Cmd      string `json:"cmd,omitempty"`
+}
+
+type byteStreamWriteSummary struct {
+	Chunks int
+	Bytes  int
 }
 
 type byteStreamSourceSessionRequest struct {
@@ -758,8 +764,8 @@ func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify
 		return
 	}
 
-	log.Printf("🧵 Byte stream source probe requested stream=%s route=%s", req.StreamID, preview(req.RouteID, 8))
-	ready, err := probeByteStreamSourceLane(env.ChannelID, req.StreamID, req.RouteID)
+	log.Printf("🧵 Byte stream source probe requested stream=%s route=%s cmd=%t", req.StreamID, preview(req.RouteID, 8), strings.TrimSpace(req.Cmd) != "")
+	ready, summary, err := probeByteStreamSourceLane(env.ChannelID, req)
 	if err != nil {
 		sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source failed: %v", err), "error", iosECDHPubkey)
 		return
@@ -769,7 +775,11 @@ func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify
 	if ready.Paired {
 		status = "paired"
 	}
-	sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s; smoke frame sent: %s", status, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
+	if !ready.Paired {
+		sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s: %s", status, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
+		return
+	}
+	sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s; sent %d chunks, %d B: %s", status, summary.Chunks, summary.Bytes, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
 }
 
 func validateByteStreamRequest(req byteStreamRequestPayload, now time.Time) error {
@@ -802,50 +812,97 @@ func isCanonicalUUID(value string) bool {
 	return true
 }
 
-func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamReadyFrame, error) {
-	session, err := createByteStreamSourceSession(channelID, streamID, routeID)
+func probeByteStreamSourceLane(channelID string, req byteStreamRequestPayload) (byteStreamReadyFrame, byteStreamWriteSummary, error) {
+	session, err := createByteStreamSourceSession(channelID, req.StreamID, req.RouteID)
 	if err != nil {
-		return byteStreamReadyFrame{}, err
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, err
 	}
 
 	u := url.URL{Scheme: websocketSchemeForServer(serverAddr), Host: serverAddr, Path: "/api/v2/bytes/stream"}
 	headers := http.Header{"Authorization": []string{"Bearer " + session.SourceToken}}
 	c, resp, err := websocket.DefaultDialer.Dial(u.String(), headers)
 	if err != nil {
-		return byteStreamReadyFrame{}, fmt.Errorf("open source lane: %s", formatDialError(err, resp))
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, fmt.Errorf("open source lane: %s", formatDialError(err, resp))
 	}
 	defer c.Close()
 
 	_, raw, err := c.ReadMessage()
 	if err != nil {
-		return byteStreamReadyFrame{}, fmt.Errorf("read source ready: %w", err)
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, fmt.Errorf("read source ready: %w", err)
 	}
 
 	var ready byteStreamReadyFrame
 	if err := json.Unmarshal(raw, &ready); err != nil {
-		return byteStreamReadyFrame{}, fmt.Errorf("decode source ready: %w", err)
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, fmt.Errorf("decode source ready: %w", err)
 	}
-	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" {
-		return byteStreamReadyFrame{}, fmt.Errorf("unexpected source ready frame")
+	if ready.Type != "stream_ready" || ready.StreamID != req.StreamID || ready.Side != "source" {
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, fmt.Errorf("unexpected source ready frame")
 	}
 	if !ready.Paired {
-		return ready, nil
+		return ready, byteStreamWriteSummary{}, nil
 	}
-	if err := writeByteStreamSmokeFrames(c, session); err != nil {
-		return byteStreamReadyFrame{}, err
+	chunks, err := byteStreamChunksForRequest(req)
+	if err != nil {
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, err
 	}
-	return ready, nil
+	summary, err := writeByteStreamFrames(c, session, chunks)
+	if err != nil {
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, err
+	}
+	return ready, summary, nil
 }
 
-func writeByteStreamSmokeFrames(c *websocket.Conn, session byteStreamSourceSessionResponse) error {
-	chunks := []string{
-		"agent-smoke-byte-frame-0",
-		"agent-smoke-byte-frame-1",
+func byteStreamChunksForRequest(req byteStreamRequestPayload) ([]string, error) {
+	cmd := strings.TrimSpace(req.Cmd)
+	if cmd == "" {
+		return []string{
+			"agent-smoke-byte-frame-0",
+			"agent-smoke-byte-frame-1",
+		}, nil
+	}
+
+	output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, nil, "sh", "-c", cmd)
+	if timedOut {
+		log.Printf("⏱️ Byte stream command timed out after %v; killed process group (stdout_stderr_bytes=%d, err=%v)", cmdTimeout, len(output), err)
+	} else {
+		log.Printf("✅ Byte stream command finished (stdout_stderr_bytes=%d, err=%v)", len(output), err)
+	}
+	output = commandReplyOutput(output, truncated, maxOutputBytes, timedOut, cmdTimeout, err)
+	return splitByteStreamChunks(output, 16*1024), nil
+}
+
+func splitByteStreamChunks(payload string, maxChunkBytes int) []string {
+	if maxChunkBytes <= 0 {
+		maxChunkBytes = 16 * 1024
+	}
+	if payload == "" {
+		return []string{"[empty byte stream]"}
+	}
+	chunks := make([]string, 0, (len(payload)+maxChunkBytes-1)/maxChunkBytes)
+	for len(payload) > 0 {
+		n := maxChunkBytes
+		if len(payload) < n {
+			n = len(payload)
+		}
+		chunks = append(chunks, payload[:n])
+		payload = payload[n:]
+	}
+	return chunks
+}
+
+func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionResponse, chunks []string) (byteStreamWriteSummary, error) {
+	if len(chunks) == 0 {
+		chunks = []string{
+			"agent-smoke-byte-frame-0",
+			"agent-smoke-byte-frame-1",
+		}
 	}
 	var lastChunkIndex uint64
+	summary := byteStreamWriteSummary{Chunks: len(chunks)}
 	for i, ciphertext := range chunks {
 		chunkIndex := uint64(i)
 		lastChunkIndex = chunkIndex
+		summary.Bytes += len(ciphertext)
 		chunk := byteStreamFrame{
 			Type:       "chunk",
 			StreamID:   session.StreamID,
@@ -854,24 +911,24 @@ func writeByteStreamSmokeFrames(c *websocket.Conn, session byteStreamSourceSessi
 			Ciphertext: ciphertext,
 		}
 		if err := c.WriteJSON(chunk); err != nil {
-			return fmt.Errorf("write source chunk %d: %w", chunkIndex, err)
+			return byteStreamWriteSummary{}, fmt.Errorf("write source chunk %d: %w", chunkIndex, err)
 		}
 
 		if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-			return fmt.Errorf("set ack read deadline: %w", err)
+			return byteStreamWriteSummary{}, fmt.Errorf("set ack read deadline: %w", err)
 		}
 		_, raw, err := c.ReadMessage()
 		_ = c.SetReadDeadline(time.Time{})
 		if err != nil {
-			return fmt.Errorf("read receiver ack %d: %w", chunkIndex, err)
+			return byteStreamWriteSummary{}, fmt.Errorf("read receiver ack %d: %w", chunkIndex, err)
 		}
 
 		var ack byteStreamFrame
 		if err := json.Unmarshal(raw, &ack); err != nil {
-			return fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
+			return byteStreamWriteSummary{}, fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
 		}
 		if ack.Type != "ack" || ack.StreamID != session.StreamID || ack.ChunkIndex == nil || *ack.ChunkIndex != chunkIndex {
-			return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
+			return byteStreamWriteSummary{}, fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
 		}
 		log.Printf("🧵 Byte stream ack received stream=%s chunk=%d", session.StreamID, chunkIndex)
 	}
@@ -883,10 +940,10 @@ func writeByteStreamSmokeFrames(c *websocket.Conn, session byteStreamSourceSessi
 		ChunkIndex: &lastChunkIndex,
 	}
 	if err := c.WriteJSON(done); err != nil {
-		return fmt.Errorf("write source done: %w", err)
+		return byteStreamWriteSummary{}, fmt.Errorf("write source done: %w", err)
 	}
 
-	return nil
+	return summary, nil
 }
 
 func createByteStreamSourceSession(channelID, streamID, routeID string) (byteStreamSourceSessionResponse, error) {

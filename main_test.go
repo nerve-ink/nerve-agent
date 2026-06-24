@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -229,6 +230,33 @@ func TestValidateByteStreamRequest(t *testing.T) {
 	}
 }
 
+func TestSplitByteStreamChunks(t *testing.T) {
+	chunks := splitByteStreamChunks("abcdef", 2)
+	want := []string{"ab", "cd", "ef"}
+	if !reflect.DeepEqual(chunks, want) {
+		t.Fatalf("chunks = %#v, want %#v", chunks, want)
+	}
+	if got := splitByteStreamChunks("", 2); len(got) != 1 || got[0] != "[empty byte stream]" {
+		t.Fatalf("empty chunks = %#v", got)
+	}
+}
+
+func TestByteStreamChunksForRequestUsesCommandOutput(t *testing.T) {
+	oldTimeout, oldMaxOutputBytes := cmdTimeout, maxOutputBytes
+	cmdTimeout, maxOutputBytes = 5*time.Second, 512*1024
+	defer func() {
+		cmdTimeout, maxOutputBytes = oldTimeout, oldMaxOutputBytes
+	}()
+
+	chunks, err := byteStreamChunksForRequest(byteStreamRequestPayload{Cmd: "printf byte-command-output"})
+	if err != nil {
+		t.Fatalf("byte stream chunks: %v", err)
+	}
+	if len(chunks) != 1 || !strings.Contains(chunks[0], "byte-command-output") {
+		t.Fatalf("chunks = %#v", chunks)
+	}
+}
+
 func TestIsCanonicalUUID(t *testing.T) {
 	if !isCanonicalUUID("03d651b2-dd3e-4cb8-a0c1-e6e5afba046a") {
 		t.Fatalf("valid UUID rejected")
@@ -341,12 +369,19 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 		serverAddr, token = oldServerAddr, oldToken
 	}()
 
-	ready, err := probeByteStreamSourceLane(channelID, streamID, routeID)
+	ready, summary, err := probeByteStreamSourceLane(channelID, byteStreamRequestPayload{
+		StreamID: streamID,
+		RouteID:  routeID,
+		Ts:       time.Now().UnixMilli(),
+	})
 	if err != nil {
 		t.Fatalf("probe source lane: %v", err)
 	}
 	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" || !ready.Paired {
 		t.Fatalf("ready = %#v", ready)
+	}
+	if summary.Chunks != 2 || summary.Bytes == 0 {
+		t.Fatalf("summary = %#v", summary)
 	}
 }
 
@@ -408,12 +443,19 @@ func TestProbeByteStreamSourceLaneDoesNotWriteWhenUnpaired(t *testing.T) {
 		serverAddr, token = oldServerAddr, oldToken
 	}()
 
-	ready, err := probeByteStreamSourceLane(channelID, streamID, routeID)
+	ready, summary, err := probeByteStreamSourceLane(channelID, byteStreamRequestPayload{
+		StreamID: streamID,
+		RouteID:  routeID,
+		Ts:       time.Now().UnixMilli(),
+	})
 	if err != nil {
 		t.Fatalf("probe source lane: %v", err)
 	}
 	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" || ready.Paired {
 		t.Fatalf("ready = %#v", ready)
+	}
+	if summary.Chunks != 0 || summary.Bytes != 0 {
+		t.Fatalf("summary = %#v", summary)
 	}
 	select {
 	case <-chunkReceived:

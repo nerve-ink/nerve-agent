@@ -7,9 +7,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestShouldHandleEnvelopeOnlyCommands(t *testing.T) {
@@ -191,5 +195,109 @@ func TestPreviewDoesNotPanicOnShortValues(t *testing.T) {
 	}
 	if got := preview("abcdefghijk", 8); got != "abcdefgh" {
 		t.Fatalf("long preview = %q", got)
+	}
+}
+
+func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
+	const (
+		streamID  = "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a"
+		routeID   = "9c77044a-934d-4381-a691-c7d7a2e86e07"
+		channelID = "pipe_1"
+		agentTok  = "agent-token"
+		sourceTok = "source-token"
+		sessionID = "source-session"
+	)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/bytes/source-sessions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("source session method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+agentTok {
+			t.Fatalf("source session auth = %q", got)
+		}
+
+		var req byteStreamSourceSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode source session request: %v", err)
+		}
+		if req.ChannelID != channelID || req.StreamID != streamID || req.RouteID != routeID {
+			t.Fatalf("source session request = %#v", req)
+		}
+
+		_ = json.NewEncoder(w).Encode(byteStreamSourceSessionResponse{
+			StreamID:        streamID,
+			RouteID:         routeID,
+			SourceUserID:    "agent:" + channelID,
+			SourceSessionID: sessionID,
+			SourceToken:     sourceTok,
+			ExpiresAt:       time.Now().Add(time.Minute).Format(time.RFC3339),
+		})
+	})
+	mux.HandleFunc("/api/v2/bytes/stream", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+sourceTok {
+			t.Fatalf("stream auth = %q", got)
+		}
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade stream: %v", err)
+		}
+		defer ws.Close()
+
+		if err := ws.WriteJSON(byteStreamReadyFrame{
+			Type:     "stream_ready",
+			StreamID: streamID,
+			Side:     "source",
+			Paired:   true,
+		}); err != nil {
+			t.Fatalf("write ready: %v", err)
+		}
+
+		for i := uint64(0); i < 2; i++ {
+			var chunk byteStreamFrame
+			if err := ws.ReadJSON(&chunk); err != nil {
+				t.Fatalf("read chunk %d: %v", i, err)
+			}
+			if chunk.Type != "chunk" || chunk.StreamID != streamID || chunk.SessionID != sessionID || chunk.ChunkIndex == nil || *chunk.ChunkIndex != i || chunk.Ciphertext == "" {
+				t.Fatalf("chunk %d = %#v", i, chunk)
+			}
+			if err := ws.WriteJSON(byteStreamFrame{
+				Type:       "ack",
+				StreamID:   streamID,
+				SessionID:  "receiver-session",
+				ChunkIndex: chunk.ChunkIndex,
+			}); err != nil {
+				t.Fatalf("write ack %d: %v", i, err)
+			}
+		}
+
+		var done byteStreamFrame
+		if err := ws.ReadJSON(&done); err != nil {
+			t.Fatalf("read done: %v", err)
+		}
+		if done.Type != "done" || done.StreamID != streamID || done.SessionID != sessionID || done.ChunkIndex == nil || *done.ChunkIndex != 1 {
+			t.Fatalf("done = %#v", done)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	oldServerAddr, oldToken := serverAddr, token
+	serverAddr, token = parsed.Host, agentTok
+	defer func() {
+		serverAddr, token = oldServerAddr, oldToken
+	}()
+
+	ready, err := probeByteStreamSourceLane(channelID, streamID, routeID)
+	if err != nil {
+		t.Fatalf("probe source lane: %v", err)
+	}
+	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" || !ready.Paired {
+		t.Fatalf("ready = %#v", ready)
 	}
 }

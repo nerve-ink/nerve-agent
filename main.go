@@ -753,14 +753,8 @@ func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify
 		sendReplyLogged(conn, env.ChannelID, "Error: Invalid byte stream request", "error", iosECDHPubkey)
 		return
 	}
-
-	age := time.Since(time.UnixMilli(req.Ts))
-	if age > 30*time.Second || age < -10*time.Second {
-		sendReplyLogged(conn, env.ChannelID, "Error: Byte stream request expired", "error", iosECDHPubkey)
-		return
-	}
-	if strings.TrimSpace(req.StreamID) == "" || strings.TrimSpace(req.RouteID) == "" {
-		sendReplyLogged(conn, env.ChannelID, "Error: Byte stream route missing", "error", iosECDHPubkey)
+	if err := validateByteStreamRequest(req, time.Now()); err != nil {
+		sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Error: %v", err), "error", iosECDHPubkey)
 		return
 	}
 
@@ -776,6 +770,36 @@ func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify
 		status = "paired"
 	}
 	sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s; smoke frame sent: %s", status, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
+}
+
+func validateByteStreamRequest(req byteStreamRequestPayload, now time.Time) error {
+	age := now.Sub(time.UnixMilli(req.Ts))
+	if age > 30*time.Second || age < -10*time.Second {
+		return fmt.Errorf("Byte stream request expired")
+	}
+	if !isCanonicalUUID(req.StreamID) || !isCanonicalUUID(req.RouteID) {
+		return fmt.Errorf("Byte stream route missing")
+	}
+	return nil
+}
+
+func isCanonicalUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, r := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamReadyFrame, error) {

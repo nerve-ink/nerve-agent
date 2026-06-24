@@ -198,6 +198,54 @@ func TestPreviewDoesNotPanicOnShortValues(t *testing.T) {
 	}
 }
 
+func TestValidateByteStreamRequest(t *testing.T) {
+	now := time.UnixMilli(1_800_000)
+	valid := byteStreamRequestPayload{
+		StreamID: "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a",
+		RouteID:  "9c77044a-934d-4381-a691-c7d7a2e86e07",
+		Ts:       now.UnixMilli(),
+	}
+	if err := validateByteStreamRequest(valid, now); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		req  byteStreamRequestPayload
+	}{
+		{name: "expired", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: valid.RouteID, Ts: now.Add(-31 * time.Second).UnixMilli()}},
+		{name: "future", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: valid.RouteID, Ts: now.Add(11 * time.Second).UnixMilli()}},
+		{name: "missing stream", req: byteStreamRequestPayload{RouteID: valid.RouteID, Ts: now.UnixMilli()}},
+		{name: "missing route", req: byteStreamRequestPayload{StreamID: valid.StreamID, Ts: now.UnixMilli()}},
+		{name: "invalid stream", req: byteStreamRequestPayload{StreamID: "stream-1", RouteID: valid.RouteID, Ts: now.UnixMilli()}},
+		{name: "invalid route", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: "route-1", Ts: now.UnixMilli()}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateByteStreamRequest(tc.req, now); err == nil {
+				t.Fatalf("invalid request was accepted: %#v", tc.req)
+			}
+		})
+	}
+}
+
+func TestIsCanonicalUUID(t *testing.T) {
+	if !isCanonicalUUID("03d651b2-dd3e-4cb8-a0c1-e6e5afba046a") {
+		t.Fatalf("valid UUID rejected")
+	}
+	for _, value := range []string{
+		"",
+		"03d651b2dd3e4cb8a0c1e6e5afba046a",
+		"03d651b2-dd3e-4cb8-a0c1-e6e5afba046z",
+		"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a ",
+		"03d651b2_dd3e_4cb8_a0c1_e6e5afba046a",
+	} {
+		if isCanonicalUUID(value) {
+			t.Fatalf("invalid UUID accepted: %q", value)
+		}
+	}
+}
+
 func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 	const (
 		streamID  = "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a"

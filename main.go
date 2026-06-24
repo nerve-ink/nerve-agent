@@ -807,7 +807,6 @@ func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamR
 	if err := writeByteStreamSmokeFrames(c, session); err != nil {
 		return byteStreamReadyFrame{}, err
 	}
-	time.Sleep(250 * time.Millisecond)
 	return ready, nil
 }
 
@@ -823,6 +822,24 @@ func writeByteStreamSmokeFrames(c *websocket.Conn, session byteStreamSourceSessi
 	if err := c.WriteJSON(chunk); err != nil {
 		return fmt.Errorf("write source chunk: %w", err)
 	}
+
+	if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return fmt.Errorf("set ack read deadline: %w", err)
+	}
+	_, raw, err := c.ReadMessage()
+	_ = c.SetReadDeadline(time.Time{})
+	if err != nil {
+		return fmt.Errorf("read receiver ack: %w", err)
+	}
+
+	var ack byteStreamFrame
+	if err := json.Unmarshal(raw, &ack); err != nil {
+		return fmt.Errorf("decode receiver ack: %w", err)
+	}
+	if ack.Type != "ack" || ack.StreamID != session.StreamID || ack.ChunkIndex == nil || *ack.ChunkIndex != chunkIndex {
+		return fmt.Errorf("unexpected receiver ack frame")
+	}
+	log.Printf("🧵 Byte stream ack received stream=%s chunk=%d", session.StreamID, chunkIndex)
 
 	done := byteStreamFrame{
 		Type:       "done",

@@ -77,6 +77,14 @@ type byteStreamReadyFrame struct {
 	Paired   bool   `json:"paired"`
 }
 
+type byteStreamFrame struct {
+	Type       string  `json:"type"`
+	StreamID   string  `json:"stream_id"`
+	SessionID  string  `json:"session_id"`
+	ChunkIndex *uint64 `json:"chunk_index,omitempty"`
+	Ciphertext string  `json:"ciphertext,omitempty"`
+}
+
 var (
 	version             = "dev"
 	serverAddr          string
@@ -767,7 +775,7 @@ func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify
 	if ready.Paired {
 		status = "paired"
 	}
-	sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s: %s", status, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
+	sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s; smoke frame sent: %s", status, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
 }
 
 func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamReadyFrame, error) {
@@ -796,7 +804,37 @@ func probeByteStreamSourceLane(channelID, streamID, routeID string) (byteStreamR
 	if ready.Type != "stream_ready" || ready.StreamID != streamID || ready.Side != "source" {
 		return byteStreamReadyFrame{}, fmt.Errorf("unexpected source ready frame")
 	}
+	if err := writeByteStreamSmokeFrames(c, session); err != nil {
+		return byteStreamReadyFrame{}, err
+	}
+	time.Sleep(250 * time.Millisecond)
 	return ready, nil
+}
+
+func writeByteStreamSmokeFrames(c *websocket.Conn, session byteStreamSourceSessionResponse) error {
+	chunkIndex := uint64(0)
+	chunk := byteStreamFrame{
+		Type:       "chunk",
+		StreamID:   session.StreamID,
+		SessionID:  session.SourceSessionID,
+		ChunkIndex: &chunkIndex,
+		Ciphertext: "agent-smoke-byte-frame",
+	}
+	if err := c.WriteJSON(chunk); err != nil {
+		return fmt.Errorf("write source chunk: %w", err)
+	}
+
+	done := byteStreamFrame{
+		Type:       "done",
+		StreamID:   session.StreamID,
+		SessionID:  session.SourceSessionID,
+		ChunkIndex: &chunkIndex,
+	}
+	if err := c.WriteJSON(done); err != nil {
+		return fmt.Errorf("write source done: %w", err)
+	}
+
+	return nil
 }
 
 func createByteStreamSourceSession(channelID, streamID, routeID string) (byteStreamSourceSessionResponse, error) {

@@ -355,6 +355,9 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 		if done.Type != "done" || done.StreamID != streamID || done.SessionID != sessionID || done.ChunkIndex == nil || *done.ChunkIndex != 1 {
 			t.Fatalf("done = %#v", done)
 		}
+		if len(done.DigestSHA256) != 64 {
+			t.Fatalf("done digest = %q", done.DigestSHA256)
+		}
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()

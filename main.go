@@ -84,11 +84,12 @@ type byteStreamReadyFrame struct {
 }
 
 type byteStreamFrame struct {
-	Type       string  `json:"type"`
-	StreamID   string  `json:"stream_id"`
-	SessionID  string  `json:"session_id"`
-	ChunkIndex *uint64 `json:"chunk_index,omitempty"`
-	Ciphertext string  `json:"ciphertext,omitempty"`
+	Type         string  `json:"type"`
+	StreamID     string  `json:"stream_id"`
+	SessionID    string  `json:"session_id"`
+	ChunkIndex   *uint64 `json:"chunk_index,omitempty"`
+	Ciphertext   string  `json:"ciphertext,omitempty"`
+	DigestSHA256 string  `json:"digest_sha256,omitempty"`
 }
 
 var (
@@ -899,10 +900,12 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 	}
 	var lastChunkIndex uint64
 	summary := byteStreamWriteSummary{Chunks: len(chunks)}
+	digest := sha256.New()
 	for i, ciphertext := range chunks {
 		chunkIndex := uint64(i)
 		lastChunkIndex = chunkIndex
 		summary.Bytes += len(ciphertext)
+		_, _ = digest.Write([]byte(ciphertext))
 		chunk := byteStreamFrame{
 			Type:       "chunk",
 			StreamID:   session.StreamID,
@@ -934,10 +937,11 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 	}
 
 	done := byteStreamFrame{
-		Type:       "done",
-		StreamID:   session.StreamID,
-		SessionID:  session.SourceSessionID,
-		ChunkIndex: &lastChunkIndex,
+		Type:         "done",
+		StreamID:     session.StreamID,
+		SessionID:    session.SourceSessionID,
+		ChunkIndex:   &lastChunkIndex,
+		DigestSHA256: fmt.Sprintf("%x", digest.Sum(nil)),
 	}
 	if err := c.WriteJSON(done); err != nil {
 		return byteStreamWriteSummary{}, fmt.Errorf("write source done: %w", err)

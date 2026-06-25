@@ -406,6 +406,18 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 				t.Fatalf("chunk %d = %#v", i, chunk)
 			}
 			receivedChunks = append(receivedChunks, chunk.Ciphertext)
+			if i == 0 {
+				for _, controlType := range []string{"pause", "resume"} {
+					if err := ws.WriteJSON(byteStreamFrame{
+						Type:       controlType,
+						StreamID:   streamID,
+						SessionID:  "receiver-session",
+						ChunkIndex: chunk.ChunkIndex,
+					}); err != nil {
+						t.Fatalf("write %s %d: %v", controlType, i, err)
+					}
+				}
+			}
 			if err := ws.WriteJSON(byteStreamFrame{
 				Type:       "ack",
 				StreamID:   streamID,

@@ -90,6 +90,8 @@ type byteStreamFrame struct {
 	ChunkIndex   *uint64 `json:"chunk_index,omitempty"`
 	Ciphertext   string  `json:"ciphertext,omitempty"`
 	DigestSHA256 string  `json:"digest_sha256,omitempty"`
+	ErrorCode    string  `json:"error_code,omitempty"`
+	ErrorText    string  `json:"error_text,omitempty"`
 }
 
 var (
@@ -931,21 +933,8 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 			return byteStreamWriteSummary{}, fmt.Errorf("write source chunk %d: %w", chunkIndex, err)
 		}
 
-		if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-			return byteStreamWriteSummary{}, fmt.Errorf("set ack read deadline: %w", err)
-		}
-		_, raw, err := c.ReadMessage()
-		_ = c.SetReadDeadline(time.Time{})
-		if err != nil {
-			return byteStreamWriteSummary{}, fmt.Errorf("read receiver ack %d: %w", chunkIndex, err)
-		}
-
-		var ack byteStreamFrame
-		if err := json.Unmarshal(raw, &ack); err != nil {
-			return byteStreamWriteSummary{}, fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
-		}
-		if ack.Type != "ack" || ack.StreamID != session.StreamID || ack.SessionID == "" || ack.ChunkIndex == nil || *ack.ChunkIndex != chunkIndex {
-			return byteStreamWriteSummary{}, fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
+		if err := readByteStreamAck(c, session.StreamID, chunkIndex); err != nil {
+			return byteStreamWriteSummary{}, err
 		}
 		log.Printf("🧵 Byte stream ack received stream=%s chunk=%d", session.StreamID, chunkIndex)
 	}
@@ -962,6 +951,42 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 	}
 
 	return summary, nil
+}
+
+func readByteStreamAck(c *websocket.Conn, streamID string, chunkIndex uint64) error {
+	for {
+		if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return fmt.Errorf("set ack read deadline: %w", err)
+		}
+		_, raw, err := c.ReadMessage()
+		_ = c.SetReadDeadline(time.Time{})
+		if err != nil {
+			return fmt.Errorf("read receiver ack %d: %w", chunkIndex, err)
+		}
+
+		var frame byteStreamFrame
+		if err := json.Unmarshal(raw, &frame); err != nil {
+			return fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
+		}
+		if frame.Type == "error" {
+			if frame.StreamID != streamID || frame.SessionID == "" {
+				return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
+			}
+			return fmt.Errorf("receiver reported byte stream error for chunk %d: %s", chunkIndex, frame.ErrorText)
+		}
+		if frame.StreamID != streamID || frame.SessionID == "" || frame.ChunkIndex == nil || *frame.ChunkIndex != chunkIndex {
+			return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
+		}
+		switch frame.Type {
+		case "ack":
+			return nil
+		case "pause", "resume":
+			log.Printf("🧵 Byte stream receiver control stream=%s chunk=%d type=%s", streamID, chunkIndex, frame.Type)
+			continue
+		default:
+			return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
+		}
+	}
 }
 
 func createByteStreamSourceSession(channelID, streamID, routeID string) (byteStreamSourceSessionResponse, error) {

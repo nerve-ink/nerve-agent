@@ -822,7 +822,7 @@ func isCanonicalUUID(value string) bool {
 				return false
 			}
 		default:
-			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
 				return false
 			}
 		}

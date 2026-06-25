@@ -222,6 +222,8 @@ func TestValidateByteStreamRequest(t *testing.T) {
 		{name: "missing route", req: byteStreamRequestPayload{StreamID: valid.StreamID, Ts: now.UnixMilli()}},
 		{name: "invalid stream", req: byteStreamRequestPayload{StreamID: "stream-1", RouteID: valid.RouteID, Ts: now.UnixMilli()}},
 		{name: "invalid route", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: "route-1", Ts: now.UnixMilli()}},
+		{name: "noncanonical uppercase stream", req: byteStreamRequestPayload{StreamID: strings.ToUpper(valid.StreamID), RouteID: valid.RouteID, Ts: now.UnixMilli()}},
+		{name: "noncanonical uppercase route", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: strings.ToUpper(valid.RouteID), Ts: now.UnixMilli()}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

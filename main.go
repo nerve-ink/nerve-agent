@@ -77,10 +77,11 @@ type byteStreamSourceSessionResponse struct {
 }
 
 type byteStreamReadyFrame struct {
-	Type     string `json:"type"`
-	StreamID string `json:"stream_id"`
-	Side     string `json:"side"`
-	Paired   bool   `json:"paired"`
+	Type          string `json:"type"`
+	StreamID      string `json:"stream_id"`
+	Side          string `json:"side"`
+	Paired        bool   `json:"paired"`
+	PeerSessionID string `json:"peer_session_id,omitempty"`
 }
 
 type byteStreamFrame struct {
@@ -858,11 +859,14 @@ func probeByteStreamSourceLane(channelID string, req byteStreamRequestPayload) (
 	if !ready.Paired {
 		return ready, byteStreamWriteSummary{}, nil
 	}
+	if strings.TrimSpace(ready.PeerSessionID) == "" {
+		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, fmt.Errorf("paired source lane missing receiver session")
+	}
 	chunks, err := byteStreamChunksForRequest(req)
 	if err != nil {
 		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, err
 	}
-	summary, err := writeByteStreamFrames(c, session, chunks)
+	summary, err := writeByteStreamFrames(c, session, ready.PeerSessionID, chunks)
 	if err != nil {
 		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, err
 	}
@@ -907,7 +911,7 @@ func splitByteStreamChunks(payload string, maxChunkBytes int) []string {
 	return chunks
 }
 
-func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionResponse, chunks []string) (byteStreamWriteSummary, error) {
+func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionResponse, receiverSessionID string, chunks []string) (byteStreamWriteSummary, error) {
 	if len(chunks) == 0 {
 		chunks = []string{
 			"agent-smoke-byte-frame-0",
@@ -933,7 +937,7 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 			return byteStreamWriteSummary{}, fmt.Errorf("write source chunk %d: %w", chunkIndex, err)
 		}
 
-		if err := readByteStreamAck(c, session.StreamID, chunkIndex); err != nil {
+		if err := readByteStreamAck(c, session.StreamID, receiverSessionID, chunkIndex); err != nil {
 			return byteStreamWriteSummary{}, err
 		}
 		log.Printf("🧵 Byte stream ack received stream=%s chunk=%d", session.StreamID, chunkIndex)
@@ -953,7 +957,7 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 	return summary, nil
 }
 
-func readByteStreamAck(c *websocket.Conn, streamID string, chunkIndex uint64) error {
+func readByteStreamAck(c *websocket.Conn, streamID, receiverSessionID string, chunkIndex uint64) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if err := c.SetReadDeadline(deadline); err != nil {
@@ -970,12 +974,12 @@ func readByteStreamAck(c *websocket.Conn, streamID string, chunkIndex uint64) er
 			return fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
 		}
 		if frame.Type == "error" {
-			if frame.StreamID != streamID || frame.SessionID == "" {
+			if frame.StreamID != streamID || frame.SessionID != receiverSessionID {
 				return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
 			}
 			return fmt.Errorf("receiver reported byte stream error for chunk %d: %s", chunkIndex, frame.ErrorText)
 		}
-		if frame.StreamID != streamID || frame.SessionID == "" || frame.ChunkIndex == nil || *frame.ChunkIndex != chunkIndex {
+		if frame.StreamID != streamID || frame.SessionID != receiverSessionID || frame.ChunkIndex == nil || *frame.ChunkIndex != chunkIndex {
 			return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
 		}
 		switch frame.Type {

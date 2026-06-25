@@ -365,6 +365,71 @@ func TestDecodeByteStreamSourceSessionResponseValidatesDescriptor(t *testing.T) 
 	}
 }
 
+func TestDecodeByteStreamReadyFrameValidatesShape(t *testing.T) {
+	valid := []byte(`{"type":"stream_ready","stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","side":"source","paired":true}`)
+	ready, err := decodeByteStreamReadyFrame(valid)
+	if err != nil {
+		t.Fatalf("valid ready rejected: %v", err)
+	}
+	if ready.Type != "stream_ready" || ready.StreamID != "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a" || ready.Side != "source" || !ready.Paired {
+		t.Fatalf("ready = %#v", ready)
+	}
+
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{name: "unknown field", raw: []byte(`{"type":"stream_ready","stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","side":"source","paired":true,"extra":"nope"}`)},
+		{name: "trailing json", raw: append(valid, []byte(`{}`)...)},
+		{name: "missing stream", raw: []byte(`{"type":"stream_ready","side":"source","paired":true}`)},
+		{name: "missing side", raw: []byte(`{"type":"stream_ready","stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","paired":true}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := decodeByteStreamReadyFrame(tc.raw); err == nil {
+				t.Fatalf("invalid ready was accepted: %s", tc.raw)
+			}
+		})
+	}
+}
+
+func TestDecodeByteStreamFrameValidatesShape(t *testing.T) {
+	chunkIndex := uint64(7)
+	valid, err := json.Marshal(byteStreamFrame{
+		Type:       "ack",
+		StreamID:   "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a",
+		SessionID:  "receiver-session",
+		ChunkIndex: &chunkIndex,
+	})
+	if err != nil {
+		t.Fatalf("marshal valid frame: %v", err)
+	}
+	frame, err := decodeByteStreamFrame(valid)
+	if err != nil {
+		t.Fatalf("valid frame rejected: %v", err)
+	}
+	if frame.Type != "ack" || frame.StreamID != "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a" || frame.ChunkIndex == nil || *frame.ChunkIndex != chunkIndex {
+		t.Fatalf("frame = %#v", frame)
+	}
+
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{name: "unknown field", raw: []byte(`{"type":"ack","stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","session_id":"receiver-session","chunk_index":7,"extra":"nope"}`)},
+		{name: "trailing json", raw: append(valid, []byte(`{}`)...)},
+		{name: "missing type", raw: []byte(`{"stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","session_id":"receiver-session","chunk_index":7}`)},
+		{name: "missing stream", raw: []byte(`{"type":"ack","session_id":"receiver-session","chunk_index":7}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := decodeByteStreamFrame(tc.raw); err == nil {
+				t.Fatalf("invalid frame was accepted: %s", tc.raw)
+			}
+		})
+	}
+}
+
 func TestIsCanonicalUUID(t *testing.T) {
 	if !isCanonicalUUID("03d651b2-dd3e-4cb8-a0c1-e6e5afba046a") {
 		t.Fatalf("valid UUID rejected")

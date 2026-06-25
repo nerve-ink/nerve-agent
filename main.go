@@ -848,8 +848,8 @@ func probeByteStreamSourceLane(channelID string, req byteStreamRequestPayload) (
 		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, fmt.Errorf("read source ready: %w", err)
 	}
 
-	var ready byteStreamReadyFrame
-	if err := json.Unmarshal(raw, &ready); err != nil {
+	ready, err := decodeByteStreamReadyFrame(raw)
+	if err != nil {
 		return byteStreamReadyFrame{}, byteStreamWriteSummary{}, fmt.Errorf("decode source ready: %w", err)
 	}
 	if ready.Type != "stream_ready" || ready.StreamID != req.StreamID || ready.Side != "source" {
@@ -965,8 +965,8 @@ func readByteStreamAck(c *websocket.Conn, streamID string, chunkIndex uint64) er
 			return fmt.Errorf("read receiver ack %d: %w", chunkIndex, err)
 		}
 
-		var frame byteStreamFrame
-		if err := json.Unmarshal(raw, &frame); err != nil {
+		frame, err := decodeByteStreamFrame(raw)
+		if err != nil {
 			return fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
 		}
 		if frame.Type == "error" {
@@ -988,6 +988,55 @@ func readByteStreamAck(c *websocket.Conn, streamID string, chunkIndex uint64) er
 			return fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
 		}
 	}
+}
+
+func decodeByteStreamReadyFrame(raw []byte) (byteStreamReadyFrame, error) {
+	var ready byteStreamReadyFrame
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&ready); err != nil {
+		return byteStreamReadyFrame{}, err
+	}
+	if dec.More() {
+		return byteStreamReadyFrame{}, fmt.Errorf("unexpected trailing source ready data")
+	}
+	if err := ensureJSONEOF(dec); err != nil {
+		return byteStreamReadyFrame{}, err
+	}
+	if ready.Type == "" || ready.StreamID == "" || ready.Side == "" {
+		return byteStreamReadyFrame{}, fmt.Errorf("source ready missing required fields")
+	}
+	return ready, nil
+}
+
+func decodeByteStreamFrame(raw []byte) (byteStreamFrame, error) {
+	var frame byteStreamFrame
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&frame); err != nil {
+		return byteStreamFrame{}, err
+	}
+	if dec.More() {
+		return byteStreamFrame{}, fmt.Errorf("unexpected trailing byte stream frame data")
+	}
+	if err := ensureJSONEOF(dec); err != nil {
+		return byteStreamFrame{}, err
+	}
+	if frame.Type == "" || frame.StreamID == "" {
+		return byteStreamFrame{}, fmt.Errorf("byte stream frame missing required fields")
+	}
+	return frame, nil
+}
+
+func ensureJSONEOF(dec *json.Decoder) error {
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 func createByteStreamSourceSession(channelID, streamID, routeID string) (byteStreamSourceSessionResponse, error) {

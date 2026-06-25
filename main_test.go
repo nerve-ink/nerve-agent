@@ -890,3 +890,154 @@ func TestProbeByteStreamSourceLaneRejectsAckFromWrongSession(t *testing.T) {
 		t.Fatalf("probe source lane error = %v", err)
 	}
 }
+
+func TestProbeByteStreamSourceLaneRejectsReceiverErrorFromWrongSession(t *testing.T) {
+	const (
+		streamID  = "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a"
+		routeID   = "9c77044a-934d-4381-a691-c7d7a2e86e07"
+		channelID = "pipe_1"
+		agentTok  = "agent-token"
+		sourceTok = "source-token"
+		sessionID = "source-session"
+	)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/bytes/source-sessions", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(byteStreamSourceSessionResponse{
+			StreamID:        streamID,
+			RouteID:         routeID,
+			SourceUserID:    "agent:" + channelID,
+			SourceSessionID: sessionID,
+			SourceToken:     sourceTok,
+			ExpiresAt:       time.Now().Add(time.Minute).Format(time.RFC3339),
+		})
+	})
+	mux.HandleFunc("/api/v2/bytes/stream", func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade stream: %v", err)
+		}
+		defer ws.Close()
+
+		if err := ws.WriteJSON(byteStreamReadyFrame{
+			Type:          "stream_ready",
+			StreamID:      streamID,
+			Side:          "source",
+			Paired:        true,
+			PeerSessionID: "receiver-session",
+		}); err != nil {
+			t.Fatalf("write ready: %v", err)
+		}
+
+		var chunk byteStreamFrame
+		if err := ws.ReadJSON(&chunk); err != nil {
+			t.Fatalf("read chunk: %v", err)
+		}
+		if err := ws.WriteJSON(byteStreamFrame{
+			Type:      "error",
+			StreamID:  streamID,
+			SessionID: "wrong-receiver-session",
+			ErrorText: "wrong peer",
+		}); err != nil {
+			t.Fatalf("write wrong-session error: %v", err)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	oldServerAddr, oldToken := serverAddr, token
+	serverAddr, token = parsed.Host, agentTok
+	defer func() {
+		serverAddr, token = oldServerAddr, oldToken
+	}()
+
+	_, _, err = probeByteStreamSourceLane(channelID, byteStreamRequestPayload{
+		StreamID: streamID,
+		RouteID:  routeID,
+		Ts:       time.Now().UnixMilli(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unexpected receiver ack frame") {
+		t.Fatalf("probe source lane error = %v", err)
+	}
+}
+
+func TestProbeByteStreamSourceLaneReportsReceiverError(t *testing.T) {
+	const (
+		streamID          = "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a"
+		routeID           = "9c77044a-934d-4381-a691-c7d7a2e86e07"
+		channelID         = "pipe_1"
+		agentTok          = "agent-token"
+		sourceTok         = "source-token"
+		sessionID         = "source-session"
+		receiverSessionID = "receiver-session"
+	)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/bytes/source-sessions", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(byteStreamSourceSessionResponse{
+			StreamID:        streamID,
+			RouteID:         routeID,
+			SourceUserID:    "agent:" + channelID,
+			SourceSessionID: sessionID,
+			SourceToken:     sourceTok,
+			ExpiresAt:       time.Now().Add(time.Minute).Format(time.RFC3339),
+		})
+	})
+	mux.HandleFunc("/api/v2/bytes/stream", func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade stream: %v", err)
+		}
+		defer ws.Close()
+
+		if err := ws.WriteJSON(byteStreamReadyFrame{
+			Type:          "stream_ready",
+			StreamID:      streamID,
+			Side:          "source",
+			Paired:        true,
+			PeerSessionID: receiverSessionID,
+		}); err != nil {
+			t.Fatalf("write ready: %v", err)
+		}
+
+		var chunk byteStreamFrame
+		if err := ws.ReadJSON(&chunk); err != nil {
+			t.Fatalf("read chunk: %v", err)
+		}
+		if err := ws.WriteJSON(byteStreamFrame{
+			Type:      "error",
+			StreamID:  streamID,
+			SessionID: receiverSessionID,
+			ErrorText: "receiver cancelled smoke",
+		}); err != nil {
+			t.Fatalf("write receiver error: %v", err)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	oldServerAddr, oldToken := serverAddr, token
+	serverAddr, token = parsed.Host, agentTok
+	defer func() {
+		serverAddr, token = oldServerAddr, oldToken
+	}()
+
+	_, _, err = probeByteStreamSourceLane(channelID, byteStreamRequestPayload{
+		StreamID: streamID,
+		RouteID:  routeID,
+		Ts:       time.Now().UnixMilli(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "receiver reported byte stream error for chunk 0: receiver cancelled smoke") {
+		t.Fatalf("probe source lane error = %v", err)
+	}
+}

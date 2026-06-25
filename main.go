@@ -954,8 +954,9 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 }
 
 func readByteStreamAck(c *websocket.Conn, streamID string, chunkIndex uint64) error {
+	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if err := c.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		if err := c.SetReadDeadline(deadline); err != nil {
 			return fmt.Errorf("set ack read deadline: %w", err)
 		}
 		_, raw, err := c.ReadMessage()

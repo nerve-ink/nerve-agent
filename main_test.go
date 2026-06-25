@@ -2,9 +2,11 @@ package main
 
 import (
 	"crypto/ecdh"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -330,6 +332,7 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 			t.Fatalf("write ready: %v", err)
 		}
 
+		receivedChunks := make([]string, 0, 2)
 		for i := uint64(0); i < 2; i++ {
 			var chunk byteStreamFrame
 			if err := ws.ReadJSON(&chunk); err != nil {
@@ -338,6 +341,7 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 			if chunk.Type != "chunk" || chunk.StreamID != streamID || chunk.SessionID != sessionID || chunk.ChunkIndex == nil || *chunk.ChunkIndex != i || chunk.Ciphertext == "" {
 				t.Fatalf("chunk %d = %#v", i, chunk)
 			}
+			receivedChunks = append(receivedChunks, chunk.Ciphertext)
 			if err := ws.WriteJSON(byteStreamFrame{
 				Type:       "ack",
 				StreamID:   streamID,
@@ -355,8 +359,13 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 		if done.Type != "done" || done.StreamID != streamID || done.SessionID != sessionID || done.ChunkIndex == nil || *done.ChunkIndex != 1 {
 			t.Fatalf("done = %#v", done)
 		}
-		if len(done.DigestSHA256) != 64 {
-			t.Fatalf("done digest = %q", done.DigestSHA256)
+		digest := sha256.New()
+		for _, chunk := range receivedChunks {
+			_, _ = digest.Write([]byte(chunk))
+		}
+		expectedDigest := fmt.Sprintf("%x", digest.Sum(nil))
+		if done.DigestSHA256 != expectedDigest {
+			t.Fatalf("done digest = %q, want %q", done.DigestSHA256, expectedDigest)
 		}
 	})
 	server := httptest.NewServer(mux)

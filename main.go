@@ -944,7 +944,7 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 		if err := json.Unmarshal(raw, &ack); err != nil {
 			return byteStreamWriteSummary{}, fmt.Errorf("decode receiver ack %d: %w", chunkIndex, err)
 		}
-		if ack.Type != "ack" || ack.StreamID != session.StreamID || ack.ChunkIndex == nil || *ack.ChunkIndex != chunkIndex {
+		if ack.Type != "ack" || ack.StreamID != session.StreamID || ack.SessionID == "" || ack.ChunkIndex == nil || *ack.ChunkIndex != chunkIndex {
 			return byteStreamWriteSummary{}, fmt.Errorf("unexpected receiver ack frame for chunk %d", chunkIndex)
 		}
 		log.Printf("🧵 Byte stream ack received stream=%s chunk=%d", session.StreamID, chunkIndex)

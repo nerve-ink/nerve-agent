@@ -755,8 +755,8 @@ func handleMessage(conn *websocket.Conn, env Envelope, iosECDHPubkey string) {
 }
 
 func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify, iosECDHPubkey string) {
-	var req byteStreamRequestPayload
-	if err := json.Unmarshal([]byte(payloadToVerify), &req); err != nil {
+	req, err := decodeByteStreamRequestPayload(payloadToVerify)
+	if err != nil {
 		sendReplyLogged(conn, env.ChannelID, "Error: Invalid byte stream request", "error", iosECDHPubkey)
 		return
 	}
@@ -781,6 +781,20 @@ func handleByteStreamRequest(conn *websocket.Conn, env Envelope, payloadToVerify
 		return
 	}
 	sendReplyLogged(conn, env.ChannelID, fmt.Sprintf("Byte stream source lane %s; sent %d chunks, %d B: %s", status, summary.Chunks, summary.Bytes, preview(req.RouteID, 8)), "standard", iosECDHPubkey)
+}
+
+func decodeByteStreamRequestPayload(raw string) (byteStreamRequestPayload, error) {
+	var req byteStreamRequestPayload
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return byteStreamRequestPayload{}, err
+	}
+	var extra struct{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return byteStreamRequestPayload{}, fmt.Errorf("unexpected trailing byte stream request data")
+	}
+	return req, nil
 }
 
 func validateByteStreamRequest(req byteStreamRequestPayload, now time.Time) error {

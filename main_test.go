@@ -232,6 +232,32 @@ func TestValidateByteStreamRequest(t *testing.T) {
 	}
 }
 
+func TestDecodeByteStreamRequestPayloadRejectsUnknownFields(t *testing.T) {
+	now := time.UnixMilli(1_800_000)
+	raw := fmt.Sprintf(
+		`{"stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","route_id":"9c77044a-934d-4381-a691-c7d7a2e86e07","ts":%d,"cmd":"printf ok"}`,
+		now.UnixMilli(),
+	)
+	req, err := decodeByteStreamRequestPayload(raw)
+	if err != nil {
+		t.Fatalf("decode valid byte stream request: %v", err)
+	}
+	if req.StreamID == "" || req.RouteID == "" || req.Ts != now.UnixMilli() || req.Cmd != "printf ok" {
+		t.Fatalf("decoded request = %#v", req)
+	}
+
+	withUnknown := fmt.Sprintf(
+		`{"stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","route_id":"9c77044a-934d-4381-a691-c7d7a2e86e07","ts":%d,"filename":"secret.txt"}`,
+		now.UnixMilli(),
+	)
+	if _, err := decodeByteStreamRequestPayload(withUnknown); err == nil {
+		t.Fatal("byte stream request with unknown field was accepted")
+	}
+	if _, err := decodeByteStreamRequestPayload(raw + `{}`); err == nil {
+		t.Fatal("byte stream request with trailing JSON was accepted")
+	}
+}
+
 func TestSplitByteStreamChunks(t *testing.T) {
 	chunks := splitByteStreamChunks("abcdef", 2)
 	want := []string{"ab", "cd", "ef"}

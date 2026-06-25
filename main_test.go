@@ -261,12 +261,16 @@ func TestDecodeByteStreamRequestPayloadRejectsUnknownFields(t *testing.T) {
 }
 
 func TestSplitByteStreamChunks(t *testing.T) {
-	chunks := splitByteStreamChunks("abcdef", 2)
-	want := []string{"ab", "cd", "ef"}
+	chunks := splitByteStreamChunks([]byte("abcdef"), 2)
+	want := []string{
+		base64.RawURLEncoding.EncodeToString([]byte("ab")),
+		base64.RawURLEncoding.EncodeToString([]byte("cd")),
+		base64.RawURLEncoding.EncodeToString([]byte("ef")),
+	}
 	if !reflect.DeepEqual(chunks, want) {
 		t.Fatalf("chunks = %#v, want %#v", chunks, want)
 	}
-	if got := splitByteStreamChunks("", 2); len(got) != 1 || got[0] != "[empty byte stream]" {
+	if got := splitByteStreamChunks(nil, 2); decodeRawURLChunksForTest(t, got) != "[empty byte stream]" {
 		t.Fatalf("empty chunks = %#v", got)
 	}
 }
@@ -282,7 +286,7 @@ func TestByteStreamChunksForRequestUsesCommandOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("byte stream chunks: %v", err)
 	}
-	if len(chunks) != 1 || !strings.Contains(chunks[0], "byte-command-output") {
+	if len(chunks) != 1 || !strings.Contains(decodeRawURLChunksForTest(t, chunks), "byte-command-output") {
 		t.Fatalf("chunks = %#v", chunks)
 	}
 }
@@ -550,7 +554,11 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 		}
 		digest := sha256.New()
 		for _, chunk := range receivedChunks {
-			_, _ = digest.Write([]byte(chunk))
+			payload, err := base64.RawURLEncoding.DecodeString(chunk)
+			if err != nil {
+				t.Fatalf("decode chunk %q: %v", chunk, err)
+			}
+			_, _ = digest.Write(payload)
 		}
 		expectedDigest := fmt.Sprintf("%x", digest.Sum(nil))
 		if done.DigestSHA256 != expectedDigest {
@@ -584,6 +592,19 @@ func TestProbeByteStreamSourceLaneSendsSmokeFrames(t *testing.T) {
 	if summary.Chunks != 2 || summary.Bytes == 0 {
 		t.Fatalf("summary = %#v", summary)
 	}
+}
+
+func decodeRawURLChunksForTest(t *testing.T, chunks []string) string {
+	t.Helper()
+	var out []byte
+	for _, chunk := range chunks {
+		payload, err := base64.RawURLEncoding.DecodeString(chunk)
+		if err != nil {
+			t.Fatalf("decode chunk %q: %v", chunk, err)
+		}
+		out = append(out, payload...)
+	}
+	return string(out)
 }
 
 func TestProbeByteStreamSourceLaneDoesNotWriteWhenUnpaired(t *testing.T) {

@@ -876,10 +876,7 @@ func probeByteStreamSourceLane(channelID string, req byteStreamRequestPayload) (
 func byteStreamChunksForRequest(req byteStreamRequestPayload) ([]string, error) {
 	cmd := strings.TrimSpace(req.Cmd)
 	if cmd == "" {
-		return []string{
-			"agent-smoke-byte-frame-0",
-			"agent-smoke-byte-frame-1",
-		}, nil
+		return splitByteStreamChunks([]byte("agent-smoke-byte-frame-0agent-smoke-byte-frame-1"), 24), nil
 	}
 
 	output, truncated, timedOut, err := runProcessWithTimeout(cmdTimeout, maxOutputBytes, nil, "sh", "-c", cmd)
@@ -889,15 +886,15 @@ func byteStreamChunksForRequest(req byteStreamRequestPayload) ([]string, error) 
 		log.Printf("✅ Byte stream command finished (stdout_stderr_bytes=%d, err=%v)", len(output), err)
 	}
 	output = commandReplyOutput(output, truncated, maxOutputBytes, timedOut, cmdTimeout, err)
-	return splitByteStreamChunks(output, 16*1024), nil
+	return splitByteStreamChunks([]byte(output), 16*1024), nil
 }
 
-func splitByteStreamChunks(payload string, maxChunkBytes int) []string {
+func splitByteStreamChunks(payload []byte, maxChunkBytes int) []string {
 	if maxChunkBytes <= 0 {
 		maxChunkBytes = 16 * 1024
 	}
-	if payload == "" {
-		return []string{"[empty byte stream]"}
+	if len(payload) == 0 {
+		payload = []byte("[empty byte stream]")
 	}
 	chunks := make([]string, 0, (len(payload)+maxChunkBytes-1)/maxChunkBytes)
 	for len(payload) > 0 {
@@ -905,18 +902,23 @@ func splitByteStreamChunks(payload string, maxChunkBytes int) []string {
 		if len(payload) < n {
 			n = len(payload)
 		}
-		chunks = append(chunks, payload[:n])
+		chunks = append(chunks, base64.RawURLEncoding.EncodeToString(payload[:n]))
 		payload = payload[n:]
 	}
 	return chunks
 }
 
+func decodeByteStreamChunkPayload(ciphertext string) ([]byte, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decode byte chunk payload: %w", err)
+	}
+	return payload, nil
+}
+
 func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionResponse, receiverSessionID string, chunks []string) (byteStreamWriteSummary, error) {
 	if len(chunks) == 0 {
-		chunks = []string{
-			"agent-smoke-byte-frame-0",
-			"agent-smoke-byte-frame-1",
-		}
+		chunks = splitByteStreamChunks([]byte("agent-smoke-byte-frame-0agent-smoke-byte-frame-1"), 24)
 	}
 	var lastChunkIndex uint64
 	summary := byteStreamWriteSummary{Chunks: len(chunks)}
@@ -924,8 +926,12 @@ func writeByteStreamFrames(c *websocket.Conn, session byteStreamSourceSessionRes
 	for i, ciphertext := range chunks {
 		chunkIndex := uint64(i)
 		lastChunkIndex = chunkIndex
-		summary.Bytes += len(ciphertext)
-		_, _ = digest.Write([]byte(ciphertext))
+		payload, err := decodeByteStreamChunkPayload(ciphertext)
+		if err != nil {
+			return byteStreamWriteSummary{}, err
+		}
+		summary.Bytes += len(payload)
+		_, _ = digest.Write(payload)
 		chunk := byteStreamFrame{
 			Type:       "chunk",
 			StreamID:   session.StreamID,

@@ -224,6 +224,7 @@ func TestValidateByteStreamRequest(t *testing.T) {
 		{name: "invalid route", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: "route-1", Ts: now.UnixMilli()}},
 		{name: "noncanonical uppercase stream", req: byteStreamRequestPayload{StreamID: strings.ToUpper(valid.StreamID), RouteID: valid.RouteID, Ts: now.UnixMilli()}},
 		{name: "noncanonical uppercase route", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: strings.ToUpper(valid.RouteID), Ts: now.UnixMilli()}},
+		{name: "oversized command", req: byteStreamRequestPayload{StreamID: valid.StreamID, RouteID: valid.RouteID, Ts: now.UnixMilli(), Cmd: strings.Repeat("x", maxByteStreamCommandBytes+1)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,6 +232,11 @@ func TestValidateByteStreamRequest(t *testing.T) {
 				t.Fatalf("invalid request was accepted: %#v", tc.req)
 			}
 		})
+	}
+
+	valid.Cmd = strings.Repeat("x", maxByteStreamCommandBytes)
+	if err := validateByteStreamRequest(valid, now); err != nil {
+		t.Fatalf("max-size command rejected: %v", err)
 	}
 }
 

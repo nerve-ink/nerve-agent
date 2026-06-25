@@ -56,6 +56,8 @@ type byteStreamRequestPayload struct {
 	Cmd      string `json:"cmd,omitempty"`
 }
 
+const maxByteStreamCommandBytes = 4096
+
 type byteStreamWriteSummary struct {
 	Chunks int
 	Bytes  int
@@ -807,6 +809,9 @@ func validateByteStreamRequest(req byteStreamRequestPayload, now time.Time) erro
 	}
 	if !isCanonicalUUID(req.StreamID) || !isCanonicalUUID(req.RouteID) {
 		return fmt.Errorf("Byte stream route missing")
+	}
+	if len(req.Cmd) > maxByteStreamCommandBytes {
+		return fmt.Errorf("Byte stream command too large")
 	}
 	return nil
 }

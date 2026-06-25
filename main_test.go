@@ -285,6 +285,44 @@ func TestByteStreamChunksForRequestUsesCommandOutput(t *testing.T) {
 	}
 }
 
+func TestCreateByteStreamSourceSessionRejectsMismatchedResponse(t *testing.T) {
+	const (
+		streamID  = "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a"
+		routeID   = "9c77044a-934d-4381-a691-c7d7a2e86e07"
+		channelID = "pipe_1"
+		agentTok  = "agent-token"
+	)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/bytes/source-sessions", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(byteStreamSourceSessionResponse{
+			StreamID:        streamID,
+			RouteID:         "327925b9-a15d-4655-b61a-8b8b271c40a6",
+			SourceUserID:    "agent:" + channelID,
+			SourceSessionID: "source-session",
+			SourceToken:     "source-token",
+			ExpiresAt:       time.Now().Add(time.Minute).Format(time.RFC3339),
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	oldServerAddr, oldToken := serverAddr, token
+	serverAddr, token = parsed.Host, agentTok
+	defer func() {
+		serverAddr, token = oldServerAddr, oldToken
+	}()
+
+	_, err = createByteStreamSourceSession(channelID, streamID, routeID)
+	if err == nil || !strings.Contains(err.Error(), "source session response mismatch") {
+		t.Fatalf("source session error = %v", err)
+	}
+}
+
 func TestIsCanonicalUUID(t *testing.T) {
 	if !isCanonicalUUID("03d651b2-dd3e-4cb8-a0c1-e6e5afba046a") {
 		t.Fatalf("valid UUID rejected")

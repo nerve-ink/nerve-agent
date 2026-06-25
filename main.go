@@ -1000,8 +1000,8 @@ func createByteStreamSourceSession(channelID, streamID, routeID string) (byteStr
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return byteStreamSourceSessionResponse{}, err
 	}
-	if out.SourceToken == "" {
-		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session token missing")
+	if out.StreamID != streamID || out.RouteID != routeID || out.SourceSessionID == "" || out.SourceToken == "" {
+		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session response mismatch or missing token")
 	}
 	return out, nil
 }

@@ -1022,12 +1022,29 @@ func createByteStreamSourceSession(channelID, streamID, routeID string) (byteStr
 		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
+	return decodeByteStreamSourceSessionResponse(raw, streamID, routeID, time.Now())
+}
+
+func decodeByteStreamSourceSessionResponse(raw []byte, streamID, routeID string, now time.Time) (byteStreamSourceSessionResponse, error) {
 	var out byteStreamSourceSessionResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&out); err != nil {
 		return byteStreamSourceSessionResponse{}, err
 	}
-	if out.StreamID != streamID || out.RouteID != routeID || out.SourceSessionID == "" || out.SourceToken == "" {
+	var extra struct{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return byteStreamSourceSessionResponse{}, fmt.Errorf("unexpected trailing source session data")
+	}
+	if out.StreamID != streamID || out.RouteID != routeID || strings.TrimSpace(out.SourceUserID) == "" || strings.TrimSpace(out.SourceSessionID) == "" || strings.TrimSpace(out.SourceToken) == "" {
 		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session response mismatch or missing token")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, out.ExpiresAt)
+	if err != nil {
+		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session response has invalid expiry")
+	}
+	if !expiresAt.After(now) {
+		return byteStreamSourceSessionResponse{}, fmt.Errorf("source session response expired")
 	}
 	return out, nil
 }

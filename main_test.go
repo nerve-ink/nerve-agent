@@ -323,6 +323,48 @@ func TestCreateByteStreamSourceSessionRejectsMismatchedResponse(t *testing.T) {
 	}
 }
 
+func TestDecodeByteStreamSourceSessionResponseValidatesDescriptor(t *testing.T) {
+	now := time.Unix(1_800_000, 0)
+	valid := byteStreamSourceSessionResponse{
+		StreamID:        "03d651b2-dd3e-4cb8-a0c1-e6e5afba046a",
+		RouteID:         "9c77044a-934d-4381-a691-c7d7a2e86e07",
+		SourceUserID:    "agent:agent_hook_1",
+		SourceSessionID: "source-session",
+		SourceToken:     "source-token",
+		ExpiresAt:       now.Add(time.Minute).Format(time.RFC3339),
+	}
+
+	raw, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatalf("marshal valid source session: %v", err)
+	}
+	out, err := decodeByteStreamSourceSessionResponse(raw, valid.StreamID, valid.RouteID, now)
+	if err != nil {
+		t.Fatalf("valid source session rejected: %v", err)
+	}
+	if out.SourceUserID != valid.SourceUserID || out.SourceSessionID != valid.SourceSessionID || out.SourceToken != valid.SourceToken {
+		t.Fatalf("decoded source session = %#v", out)
+	}
+
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{name: "unknown field", raw: []byte(`{"stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","route_id":"9c77044a-934d-4381-a691-c7d7a2e86e07","source_user_id":"agent:agent_hook_1","source_session_id":"source-session","source_token":"source-token","expires_at":"` + valid.ExpiresAt + `","extra":"nope"}`)},
+		{name: "trailing json", raw: append(raw, []byte(`{}`)...)},
+		{name: "missing source user", raw: []byte(`{"stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","route_id":"9c77044a-934d-4381-a691-c7d7a2e86e07","source_session_id":"source-session","source_token":"source-token","expires_at":"` + valid.ExpiresAt + `"}`)},
+		{name: "expired", raw: []byte(`{"stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","route_id":"9c77044a-934d-4381-a691-c7d7a2e86e07","source_user_id":"agent:agent_hook_1","source_session_id":"source-session","source_token":"source-token","expires_at":"` + now.Add(-time.Second).Format(time.RFC3339) + `"}`)},
+		{name: "invalid expiry", raw: []byte(`{"stream_id":"03d651b2-dd3e-4cb8-a0c1-e6e5afba046a","route_id":"9c77044a-934d-4381-a691-c7d7a2e86e07","source_user_id":"agent:agent_hook_1","source_session_id":"source-session","source_token":"source-token","expires_at":"tomorrow"}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := decodeByteStreamSourceSessionResponse(tc.raw, valid.StreamID, valid.RouteID, now); err == nil {
+				t.Fatalf("invalid source session was accepted: %s", tc.raw)
+			}
+		})
+	}
+}
+
 func TestIsCanonicalUUID(t *testing.T) {
 	if !isCanonicalUUID("03d651b2-dd3e-4cb8-a0c1-e6e5afba046a") {
 		t.Fatalf("valid UUID rejected")

@@ -3,13 +3,13 @@
 [![Website](https://img.shields.io/badge/website-nerve.ink-111214)](https://nerve.ink)
 [![Go Reference](https://pkg.go.dev/badge/github.com/nerve-ink/nerve-agent.svg)](https://pkg.go.dev/github.com/nerve-ink/nerve-agent)
 
-[Website](https://nerve.ink) · [App Store](https://apps.apple.com/us/app/nerveops/id6778026992) · [Docs](https://nerve.ink/docs.html) · [Send signals with nerve-cli](https://github.com/nerve-ink/nerve-cli)
+[Website](https://nerve.ink) · [App Store](https://apps.apple.com/us/app/nerveops/id6778026992) · [Google Play](https://play.google.com/store/apps/details?id=ink.nerve.app&pcampaignid=web_share) · [Docs](https://nerve.ink/docs.html) · [Send signals with nerve-cli](https://github.com/nerve-ink/nerve-cli)
 
 Do not start here unless you need actions.
 
 Start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli) for encrypted
-CI/CD, cron and server alerts to iPhone. Use `nerve-agent` only for signed,
-bounded actions on infrastructure you control.
+CI/CD, cron, webhook and server alerts to iPhone and Android. Use
+`nerve-agent` only for signed, bounded actions on infrastructure you control.
 
 `nerve-agent` is the server-side action runner for Nerve. It connects to the
 Nerve relay, receives E2E-encrypted command envelopes, verifies Ed25519
@@ -21,13 +21,15 @@ on infrastructure you control.
 If you only need deploy alerts, cron notifications, or one-way status messages,
 do not run an agent yet.
 
-NerveOps for iOS is available as a public beta on the
-[App Store](https://apps.apple.com/us/app/nerveops/id6778026992).
+NerveOps is available on the
+[App Store](https://apps.apple.com/us/app/nerveops/id6778026992) and
+[Google Play](https://play.google.com/store/apps/details?id=ink.nerve.app&pcampaignid=web_share).
 
 ## Run your first agent
 
 1. Install NerveOps from the
-   [App Store](https://apps.apple.com/us/app/nerveops/id6778026992).
+   [App Store](https://apps.apple.com/us/app/nerveops/id6778026992) or
+   [Google Play](https://play.google.com/store/apps/details?id=ink.nerve.app&pcampaignid=web_share).
 2. Create a pipe, open **Pipe Setup**, and choose **Run agent**.
 3. Copy the agent token.
 4. Start the agent on a Linux server or VM you control:

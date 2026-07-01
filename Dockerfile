@@ -13,6 +13,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/nerve-a
 
 FROM alpine:3.22
 
+LABEL org.opencontainers.image.title="Nerve Agent"
+LABEL org.opencontainers.image.description="Run optional signed NerveOps recovery and status actions from a trusted container after deploy or server alerts."
+LABEL org.opencontainers.image.source="https://github.com/nerve-ink/nerve-agent"
+LABEL org.opencontainers.image.url="https://nerve.ink"
+
 RUN apk upgrade --no-cache \
   && apk add --no-cache ca-certificates \
   && addgroup -S nerve \

@@ -114,10 +114,24 @@ nerve-agent -server localhost:8080 -token YOUR_AGENT_TOKEN
 
 ## Docker
 
-The Docker image is useful when you want the agent to run as a containerized
-worker. Remember that commands execute inside the container namespace. If you
-need host-level administration, use the systemd install path instead, or mount
-only the specific scripts/data the agent is allowed to touch.
+Use the Docker image when alerts are not enough and you want a trusted container
+to run signed, bounded recovery or status actions from a Nerve pipe.
+
+Start with the send-only CLI image when the job is just:
+
+- alert me when CI or deploy fails;
+- alert me when cron, backup, or smoke tests fail;
+- page my phone without giving CI command-execution power.
+
+Use this agent image only when the next step is an explicit action, for example:
+
+- check deploy status from a locked-down container;
+- run an allowlisted recovery script;
+- return bounded encrypted command output to the same pipe.
+
+Remember that commands execute inside the container namespace. If you need
+host-level administration, use the systemd install path instead, or mount only
+the specific scripts/data the agent is allowed to touch.
 
 The published image is intentionally minimal. It includes the agent binary,
 Alpine base utilities, and CA certificates; it does not bundle `curl`, `jq`,
@@ -126,8 +140,10 @@ small derived image or mount a narrow handler script with exactly the binaries i
 needs.
 
 This image runs the long-lived `nerve-agent` action runner. It is not the
-send-only `nerve send` CLI path. For one-way CI/CD, cron, and server alerts,
-start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli).
+send-only `nerve send` CLI path. For one-way CI/CD, cron, backup, deploy, and
+server alerts, start with [`nerve-cli`](https://github.com/nerve-ink/nerve-cli).
+
+### Run A Trusted Action Agent
 
 ```bash
 docker run --rm -it \
@@ -137,7 +153,7 @@ docker run --rm -it \
   -token YOUR_AGENT_TOKEN
 ```
 
-GitHub Container Registry mirror:
+GHCR mirror:
 
 ```bash
 docker run --rm -it \
